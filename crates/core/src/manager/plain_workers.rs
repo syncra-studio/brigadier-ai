@@ -1022,6 +1022,19 @@ impl SessionManager {
             (_, TurnStatus::Interrupted) => (TaskState::Reported, None, EventKind::Interrupted),
             _ => (TaskState::Reported, None, EventKind::Failed),
         };
+        // A turn that ended well with a job of its own running is no news: it stays at work, and
+        // the turn that job's end starts tells its parent (or the job's end with none after it).
+        let holding = if kind == EventKind::TurnEnded {
+            live.hold_turn_end(|| self.worker_jobs_running(&task.id))
+                .await
+        } else {
+            None
+        };
+        let state = if holding.is_some() {
+            TaskState::Running
+        } else {
+            state
+        };
         // D44/D47: Reported means it can take another message, not that this turn succeeded.
         let step = match kind {
             EventKind::Failed => Some(WorkerStepKind::Failed),
@@ -1051,11 +1064,13 @@ impl SessionManager {
         let finished = status != TurnStatus::Interrupted;
         // Its word owes its session's CLI a turn from before the task reads reported, so its
         // block never reads over in between (D24, D153).
-        if !super::workers::explicitly_paused(task) {
-            self.owe_cli_turn(&task.conversation_id);
+        if holding.is_none() {
+            if !super::workers::explicitly_paused(task) {
+                self.owe_cli_turn(&task.conversation_id);
+            }
+            live.reporting
+                .store(true, std::sync::atomic::Ordering::SeqCst);
         }
-        live.reporting
-            .store(true, std::sync::atomic::Ordering::SeqCst);
         // Its session paused it meanwhile (D7): the pause took this turn's end, and its
         // session hears nothing of it.
         let updated = self
@@ -1092,6 +1107,13 @@ impl SessionManager {
             Err(err) => {
                 tracing::warn!(task = %task.id, error = %err, "could not record a worker's turn end");
             }
+        }
+        if let Some(jobs) = holding {
+            self.worker_quiet.holding(&task.id, Some(jobs));
+            let (manager, conversation, worker) =
+                (self.arc(), task.conversation_id.clone(), task.id.clone());
+            self.spawn(async move { manager.drain_worker_queue(&conversation, &worker).await });
+            return;
         }
         let mut event = event(&task.id, kind);
         match &cutoff {

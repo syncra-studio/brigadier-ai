@@ -57,6 +57,9 @@ pub(crate) struct WorkerCli {
     doing: Option<(Option<String>, WorkerDoing)>,
     /// Its background tasks, as its CLI says them, and those that ended lately.
     background: Vec<BackgroundTask>,
+    /// Its subagent calls under way, by item id: Codex lists no task for one that outlives its
+    /// turn.
+    subagents: Vec<String>,
     /// The commands of its latest calls that may start a background task, by item id: a Claude
     /// task is labelled with its description, and only its call says what it runs.
     commands: Vec<(String, String)>,
@@ -106,6 +109,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
         ..cli.clone()
     };
     cli.last_event_ms = Some(at);
+    thread_view::note_subagent(&mut cli.subagents, event);
     match event {
         ProviderEvent::TurnStarted { .. } => {
             if !cli.open {
@@ -163,6 +167,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
         ProviderEvent::Exited { .. } => {
             // Its background tasks end with its CLI.
             cli.background.clear();
+            cli.subagents.clear();
             cli.commands.clear();
             if cli.open {
                 cli.open = false;
@@ -409,35 +414,34 @@ fn working(task: &Task, cli: Option<&WorkerCli>) -> bool {
         && !task.plain.as_ref().is_some_and(|plain| plain.closed)
 }
 
-/// Its CLI's turn is open, or background commands of its own still run (see [`working`]).
+/// Its CLI's turn is open, or background work of its own still runs (see [`working`]).
 fn busy(cli: &WorkerCli) -> bool {
-    cli.open
-        || cli.background.iter().any(|job| {
-            job.status == brigadier_providers::BackgroundTaskStatus::Running
-                && job.kind != brigadier_providers::BackgroundTaskKind::Agent
-                && !cli
-                    .commands
-                    .iter()
-                    .find(|(id, _)| job.item_id.as_ref() == Some(id))
-                    .map(|(_, command)| command.as_str())
-                    .or_else(|| {
-                        (job.kind == brigadier_providers::BackgroundTaskKind::Terminal)
-                            .then_some(job.label.as_str())
-                    })
-                    .is_some_and(|command| {
-                        (matches!(
-                            job.kind,
-                            brigadier_providers::BackgroundTaskKind::Shell
-                                | brigadier_providers::BackgroundTaskKind::Terminal
-                        ) && thread_view::persistent_app(command))
-                            || (brigadier_providers::policy::runs_only_brigadier(command)
-                                && (brigadier_providers::policy::runs_brigadier(
-                                    command, "preview",
-                                ) || brigadier_providers::policy::runs_brigadier(
-                                    command, "wait",
-                                )))
-                    })
-        })
+    cli.open || !cli.subagents.is_empty() || cli.background.iter().any(|job| job_runs(cli, job))
+}
+
+/// Whether `job` still runs and is work it comes back from: not an app it left running, nor
+/// Brigadier's own `wait` or `preview`, which never end by themselves.
+fn job_runs(cli: &WorkerCli, job: &BackgroundTask) -> bool {
+    job.status == brigadier_providers::BackgroundTaskStatus::Running
+        && !cli
+            .commands
+            .iter()
+            .find(|(id, _)| job.item_id.as_ref() == Some(id))
+            .map(|(_, command)| command.as_str())
+            .or_else(|| {
+                (job.kind == brigadier_providers::BackgroundTaskKind::Terminal)
+                    .then_some(job.label.as_str())
+            })
+            .is_some_and(|command| {
+                (matches!(
+                    job.kind,
+                    brigadier_providers::BackgroundTaskKind::Shell
+                        | brigadier_providers::BackgroundTaskKind::Terminal
+                ) && thread_view::persistent_app(command))
+                    || (brigadier_providers::policy::runs_only_brigadier(command)
+                        && (brigadier_providers::policy::runs_brigadier(command, "preview")
+                            || brigadier_providers::policy::runs_brigadier(command, "wait")))
+            })
 }
 
 /// Its turn ended done and nothing of its own runs on: a turn that ended with a background
@@ -560,6 +564,30 @@ impl SessionManager {
     }
 
     /// The sidebar's activity bit, from the same CLI state as the workers' rows, without git.
+    /// What of worker `task`'s own still runs after a turn that ended well, in its CLI's words:
+    /// its parent hears of that turn only once none does.
+    pub(super) fn worker_jobs_running(&self, task: &TaskId) -> Vec<String> {
+        let held = self.worker_rows.cli.lock().unwrap();
+        let Some(cli) = held
+            .get(task)
+            .filter(|cli| cli.last_end == Some(TurnEnd::Done))
+        else {
+            return Vec::new();
+        };
+        cli.background
+            .iter()
+            .filter(|job| job_runs(cli, job))
+            .map(|job| {
+                if job.label.is_empty() {
+                    job.id.clone()
+                } else {
+                    job.label.clone()
+                }
+            })
+            .chain(cli.subagents.iter().map(|_| "a subagent".to_owned()))
+            .collect()
+    }
+
     pub(super) fn workers_working(&self, tasks: &[Task]) -> bool {
         let cli = self.worker_rows.cli.lock().unwrap();
         tasks.iter().any(|task| working(task, cli.get(&task.id)))

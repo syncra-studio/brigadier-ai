@@ -622,22 +622,7 @@ impl LiveTurn {
 
     /// Notes a subagent call's start or end ([`Self::subagents`]).
     pub(crate) fn note_subagent(&mut self, event: &ProviderEvent) {
-        if let ProviderEvent::ToolCall {
-            item_id,
-            name,
-            status,
-            ..
-        } = event
-            && brigadier_providers::adapters::ADAPTERS.iter().any(|cli| {
-                cli.subagent_tools
-                    .contains(&crate::digest::bare_tool_name(name))
-            })
-        {
-            self.subagents.retain(|id| id != item_id);
-            if *status == brigadier_providers::ItemStatus::InProgress {
-                self.subagents.push(item_id.clone());
-            }
-        }
+        note_subagent(&mut self.subagents, event);
     }
 
     /// What of its CLI's background work holds its turn now (`CliJobs`).
@@ -669,6 +654,26 @@ impl LiveTurn {
             waking: (!self.open || self.awaiting_user)
                 && self.waking_until.is_some_and(|until| now < until),
             subagents,
+        }
+    }
+}
+
+/// Notes in `subagents`, by item id, a subagent call's start or end.
+pub(crate) fn note_subagent(subagents: &mut Vec<String>, event: &ProviderEvent) {
+    if let ProviderEvent::ToolCall {
+        item_id,
+        name,
+        status,
+        ..
+    } = event
+        && brigadier_providers::adapters::ADAPTERS.iter().any(|cli| {
+            cli.subagent_tools
+                .contains(&crate::digest::bare_tool_name(name))
+        })
+    {
+        subagents.retain(|id| id != item_id);
+        if *status == brigadier_providers::ItemStatus::InProgress {
+            subagents.push(item_id.clone());
         }
     }
 }

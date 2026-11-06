@@ -635,6 +635,19 @@ impl Quiet {
         }
     }
 
+    /// A worker whose turn ended with `jobs` of its own running, held back from its parent:
+    /// watched as one at work, so a job whose end never comes is told too. `None`: over.
+    pub(crate) fn holding(&self, task: &TaskId, jobs: Option<Vec<String>>) {
+        let mut watches = self.watches.lock().unwrap_or_else(PoisonError::into_inner);
+        let watch = watches.entry(task.clone()).or_default();
+        watch.working = jobs.is_some();
+        watch.running = jobs
+            .unwrap_or_default()
+            .into_iter()
+            .map(|job| (job.clone(), job))
+            .collect();
+    }
+
     /// The workers quiet past the limit, now told: each with its parent and what runs.
     fn due(&self, now: i64) -> Vec<(ConversationId, TaskId, Vec<String>, i64)> {
         let after = i64::try_from(self.after_ms.load(Ordering::Relaxed)).unwrap_or(i64::MAX);
