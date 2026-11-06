@@ -40,7 +40,7 @@ import {
 import { openAddProject } from "@/state/addProject";
 import { sortTime } from "@/state/inbox";
 import { pickClick, pickedIn, prunePicked } from "@/state/picking";
-import { useRowMark, useTabStates } from "@/state/tabStates";
+import { useRowMark } from "@/state/tabStates";
 import { useApp } from "@/state/store";
 
 // ----- the Home panel --------------------------------------------------------------------
@@ -84,39 +84,13 @@ function useSections(): Sections {
     }
     // By name: a project stays put whatever its sessions do.
     const sortedProjects = Object.values(projects).toSorted((a, b) => a.name.localeCompare(b.name));
+    // A fork sits under its source all the same (D211).
+    for (const [projectId, list] of Object.entries(sessions)) sessions[projectId] = forksUnderSources(list);
     return { pinned, chats: forksUnderSources(chats), projects: sortedProjects, sessions };
   }, [projects, conversations]);
   // What the list shows is what is opened next: read ahead so it opens at once.
   useEffect(() => prewarmConversations(conversations), [conversations]);
   return sections;
-}
-
-/**
- * The light inbox (Q63): each project's sessions that need the user come first, in their order
- * otherwise.
- */
-function useInboxSections(): Sections {
-  const sections = useSections();
-  const { projects, sessions } = sections;
-  const ids = useMemo(
-    () => projects.flatMap((project) => (sessions[project.id] ?? NO_SESSIONS).map((conversation) => conversation.id)),
-    [projects, sessions],
-  );
-  const needs = useTabStates(ids)
-    .map((state) => (state === "needsYou" || state === "failed" ? "1" : "0"))
-    .join("");
-  return useMemo(() => {
-    const needing = new Set(ids.filter((_, index) => needs[index] === "1"));
-    const ordered: Record<string, Conversation[]> = {};
-    for (const [projectId, list] of Object.entries(sessions)) {
-      const first = list.filter((conversation) => needing.has(conversation.id));
-      // A fork sits under its source all the same (D211).
-      ordered[projectId] = forksUnderSources(
-        first.length > 0 ? [...first, ...list.filter((conversation) => !needing.has(conversation.id))] : list,
-      );
-    }
-    return { ...sections, sessions: ordered };
-  }, [sections, sessions, ids, needs]);
 }
 
 type SectionId = "pinned" | "projects" | "chats";
@@ -159,7 +133,7 @@ function useFoldedSections<T extends string>(key: string, initial: T[] = []) {
  * and Chats. View's Show list narrows either. Each section folds away from its title.
  */
 export function AppSidebar() {
-  const { pinned: allPinned, chats: allChats, projects: allProjects, sessions } = useInboxSections();
+  const { pinned: allPinned, chats: allChats, projects: allProjects, sessions } = useSections();
   const show = useShowFilter();
   const projects = useMemo(() => allProjects.filter((project) => !show.hiddenProjects.has(project.id)), [allProjects, show]);
   const pinned = useMemo(() => allPinned.filter((conversation) => shownBy(conversation, show)), [allPinned, show]);
@@ -470,7 +444,7 @@ function FlyoutConversation({
 
 /** The Projects flyout: each project, picked to start a session in it, with its sessions. */
 function ProjectsFlyout({ pick }: { pick: (choose: () => void) => void }) {
-  const { projects, sessions } = useInboxSections();
+  const { projects, sessions } = useSections();
   const activeId = useApp((s) => (s.selection.type === "conversation" ? s.selection.id : null));
   const draftProjectId = useApp((s) =>
     s.selection.type === "draft" && s.selection.kind === "session" ? s.selection.projectId : null,

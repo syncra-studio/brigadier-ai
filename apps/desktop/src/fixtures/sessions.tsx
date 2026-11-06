@@ -3,8 +3,7 @@
  * with its own title and state, archived sessions left out, and a click that opens the session.
  * The sessions of what was once a workspace are plain sessions too. `close=1` adds the open
  * session's tab bar: closing a working session's tab stops nothing and a click on its row opens
- * it again. The sessions that need the user come first; one that
- * starts needing the user moves up. `rowThread=1`: a row's ⋯, its session not open, copies its
+ * it again. A session that starts needing the user stays where it is. `rowThread=1`: a row's ⋯, its session not open, copies its
  * thread as Markdown and forks it from its latest answer, both read from the daemon first; one
  * with no answer says there is nothing to fork. Writes what it saw to #sessions-result
  * (SessionsRender.test.ts reads it).
@@ -573,7 +572,7 @@ function Fixture() {
       setTimeout(() => {
         seen.opened = useApp.getState().selection;
         seen.activeAfter = rows().filter((row) => row.active).map((row) => row.title);
-        // "Old fix" asks for an approval: it moves up among those that need the user.
+        // "Old fix" asks for an approval: it stays where it is.
         useActivity.setState((state) => ({ byConversation: { ...state.byConversation, ...Object.fromEntries([activity("w8-a", { approvals: ["a-2"] })]) } }));
         setTimeout(async () => {
           seen.rowsAfter = rows().map((row) => row.title);

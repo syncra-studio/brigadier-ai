@@ -144,9 +144,10 @@ test("Group by None: Pinned, Open and a folded Archived; rows stay put through a
   const byName = ["brigadier-ai", "freelogo", "steady-app", "steady-app-billing-service"];
   assert.deepEqual(seen.showOrder, ["All", ...byName, "Chats"]);
   assert.deepEqual(seen.placedBefore.projects, byName);
-  assert.deepEqual(seen.placedBefore.sessions, ["Rate limit the exports", "Onboarding email sequence", "Invoice export columns"]);
+  // A row that needs the user (Rate limit the exports) has no place of its own.
+  assert.deepEqual(seen.placedBefore.sessions, ["Onboarding email sequence", "Rate limit the exports", "Invoice export columns"]);
   assert.deepEqual(seen.placedAfterAgent, seen.placedBefore, "an agent's update moves neither a project nor a session");
-  assert.deepEqual(seen.placedAfterSend, { projects: byName, sessions: ["Rate limit the exports", "Invoice export columns", "Onboarding email sequence"] }, "the user's message moves its session, not its project");
+  assert.deepEqual(seen.placedAfterSend, { projects: byName, sessions: ["Invoice export columns", "Onboarding email sequence", "Rate limit the exports"] }, "the user's message moves its session, not its project");
   // Show narrows it too, the Chats section with it; the control stays.
   assert.deepEqual(seen.groupedFiltered.sections, ["Pinned", "Projects"]);
   assert.ok(!seen.groupedFiltered.projects.includes("freelogo"));

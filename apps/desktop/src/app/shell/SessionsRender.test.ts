@@ -79,7 +79,7 @@ test("a row's ⋯, its session not open, reads the thread to copy it as Markdown
 });
 
 // The real sidebar in Chromium over a faked daemon: a project lists its sessions, one row each
-// with its own title and state, those that need the user first,
+// with its own title and state, in the order of the user's last message,
 // and a click opens that session.
 test("sidebar: a project's sessions are rows of their own, the sessions of an old workspace too, each with its state", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html", "sessions-result", 20000)) as {
@@ -98,17 +98,17 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   assert.deepEqual(
     seen.rows.map(({ title, status, tip }) => [title, status, tip]),
     [
-      // Those that need the user float to the top, newest first like the rest.
-      ["Deploy the site", "waiting", "Needs you · approval"],
-      ["Broken build", "amber", "Failed"],
-      ["Ship the release", "waiting", "Needs you · sign-in"],
+      // By the user's last message alone: needing them or failing moves no row.
       ["Footer", "working", "Working"],
       ["Header", "working", "Working"],
       ["Fix the login", null, null],
       ["Tidy the docs", null, null],
       ["Waiting on a limit", "working", "Waiting for usage limit · resets 14:05"],
+      ["Deploy the site", "waiting", "Needs you · approval"],
       ["Lone worker", "working", "Working"],
+      ["Broken build", "amber", "Failed"],
       ["Old fix", null, null],
+      ["Ship the release", "waiting", "Needs you · sign-in"],
       ["Finished reply", null, null],
       // Stopped shows nothing (D11).
       ["Paused task", null, null],
@@ -130,8 +130,8 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   assert.deepEqual(seen.activeAfter, ["Header"]);
   assert.deepEqual(
     seen.rowsAfter,
-    ["Deploy the site", "Broken build", "Old fix", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Finished reply", "Paused task", "Draft the notes"],
-    "a session that starts needing the user moves up",
+    ["Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Deploy the site", "Lone worker", "Broken build", "Old fix", "Ship the release", "Finished reply", "Paused task", "Draft the notes"],
+    "a session that starts needing the user stays where it is",
   );
   assert.deepEqual(seen.projectHeaderAfter, seen.projectHeader, "sessions needing the user add no badge to the header");
   // A long title fades out at the end, a stopped row's as any other: no word beside it.
@@ -151,7 +151,7 @@ test("the Projects flyout shows a folder and name without a count, preserving it
     sessions: string[];
   };
   assert.deepEqual(seen.projectHeader, { text: "brigadier", icons: 1 });
-  assert.deepEqual(seen.sessions, ["Deploy the site", "Broken build", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Old fix", "Finished reply", "Paused task", "Draft the notes"]);
+  assert.deepEqual(seen.sessions, ["Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Deploy the site", "Lone worker", "Broken build", "Old fix", "Ship the release", "Finished reply", "Paused task", "Draft the notes"]);
 });
 
 test("closing a working session's tab stops nothing and says so in a note; it stays in the sidebar and its row opens it again", { timeout: 60000 }, async (t) => {
@@ -236,9 +236,9 @@ test("unopened sessions with working workers keep Working until idle, including 
   type Row = { title: string; status: string; mark: string | null };
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?workerActivity=1", "sessions-result", 20000)) as { before: Row[]; someWorking: Row; idle: Row; reconnected: Row; threadReads: string[] };
   assert.deepEqual(seen.before.map(({ title, status, mark }) => [title, status, mark]), [
+    ["Workers still running", "working", "spinner"],
     ["Approval with workers", "waiting", "waiting"],
     ["Question with workers", "waiting", "waiting"],
-    ["Workers still running", "working", "spinner"],
   ]);
   for (const row of [seen.someWorking, seen.reconnected]) {
     assert.equal(row.status, "working");
