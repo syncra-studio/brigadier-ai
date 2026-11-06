@@ -15,6 +15,7 @@ declare global {
     brigadierShell: {
       tabsRead(): Promise<Record<string, TabRecord>>;
       tabsWrite(tabs: Record<string, TabRecord>): Promise<void>;
+      flushStorage(): void;
       profilePartition(profileId: string): Promise<string>;
       guestInfo(id: number): Promise<{ id: number; pid: number; url: string } | null>;
       onGuestPopup(listener: (details: { from: number; url: string }) => void): void;

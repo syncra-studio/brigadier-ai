@@ -2,6 +2,7 @@
 import { setPageCommands } from "@/ipc/native";
 
 import { browserCommands } from "./browserCommands";
+import { keepTabsOnDisk } from "./keepTabs";
 import { installTabLayer } from "./tabLayer";
 import "./shell.css";
 
@@ -15,3 +16,4 @@ if (window.brigadierNative) {
   installShellIpc();
 }
 void import("@/main");
+void keepTabsOnDisk();

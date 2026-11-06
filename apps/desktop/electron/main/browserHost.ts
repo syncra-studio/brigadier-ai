@@ -10,12 +10,14 @@ import { note } from "./events";
 import { installGuest } from "./guestPopups";
 import { applyPermissionPolicy } from "./permissions";
 import { isProfilePartition, profilePartition } from "./profiles";
+import { installDurableStorage, keepStorageOf, replaceFile } from "./durableStorage";
 import { keepSessionCookies } from "./sessionCookies";
 
 // The renderer's tab model: one JSON file. Which profile a tab belongs to has to survive a restart.
 const tabsFile = () => path.join(app.getPath("userData"), "browser-tabs.json");
 
 export function installBrowserHost(): void {
+  installDurableStorage();
   app.on("render-process-gone", (_event, contents, details) => {
     note("render-process-gone", { webContents: contents.id, type: contents.getType(), url: contents.getURL(), ...details });
   });
@@ -33,6 +35,7 @@ export function installBrowserHost(): void {
 
   app.on("web-contents-created", (_event, contents) => {
     note("web-contents-created", { webContents: contents.id, type: contents.getType() });
+    keepStorageOf(contents);
     contents.once("destroyed", () => note("web-contents-destroyed", { webContents: contents.id }));
     contents.on("unresponsive", () => note("unresponsive", { webContents: contents.id }));
     contents.on("responsive", () => note("responsive", { webContents: contents.id }));
@@ -73,7 +76,7 @@ export function installBrowserHost(): void {
     }
   });
   ipcMain.handle("brigadier:tabs-write", (_event, tabs) => {
-    fs.writeFileSync(tabsFile(), JSON.stringify(tabs));
+    replaceFile(tabsFile(), JSON.stringify(tabs));
   });
   ipcMain.handle("brigadier:profile-partition", (_event, profileId: string) => profilePartition(profileId));
   ipcMain.handle("brigadier:guest-info", (_event, id: number) => {

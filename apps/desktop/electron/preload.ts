@@ -10,6 +10,7 @@ if (!process.isMainFrame) void webFrame.executeJavaScript(frameHtml.slice(frameH
 if (process.isMainFrame) contextBridge.exposeInMainWorld("brigadierShell", {
   tabsRead: () => ipcRenderer.invoke("brigadier:tabs-read"),
   tabsWrite: (tabs: unknown) => ipcRenderer.invoke("brigadier:tabs-write", tabs),
+  flushStorage: () => ipcRenderer.send("brigadier:flush-storage"),
   profilePartition: (profileId: string) => ipcRenderer.invoke("brigadier:profile-partition", profileId),
   guestInfo: (id: number) => ipcRenderer.invoke("brigadier:guest-info", id),
   onGuestPopup: (listener: (details: unknown) => void) => ipcRenderer.on("brigadier:guest-popup", (_event, details) => listener(details)),
