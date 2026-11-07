@@ -123,9 +123,10 @@ function ProfileResult({
       )}
       {what.passwords && (
         <PartRow
-          mark={outcome.passwordsError ? "no" : (record.passwordsSkipped ?? 0) > 0 ? "part" : "yes"}
+          mark={outcome.passwordsError ? "no" : record.passwordsKept || (record.passwordsSkipped ?? 0) > 0 ? "part" : "yes"}
           name="Passwords"
           line={outcome.passwordsError
+            ?? (record.passwordsKept ? `None from ${source.name} could be used, so this profile kept its own` : undefined)
             ?? `${counted(record.passwords ?? 0, "password", "passwords")}${(record.passwordsSkipped ?? 0) > 0 ? ` · ${counted(record.passwordsSkipped ?? 0, "left out", "left out")}` : ""}`}
           onRetry={outcome.passwordsError && passwordsRetryable(source.family) ? () => onRetry("passwords") : undefined}
         />

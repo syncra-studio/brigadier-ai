@@ -72,6 +72,7 @@ export function importInto(profile: string): void {
 export type ImportedRecord = ImportRecord & {
   passwords?: number;
   passwordsSkipped?: number;
+  passwordsKept?: boolean;
   bookmarks?: number;
   googleLeftOut?: number;
   appBoundDomains?: string[];

@@ -11,7 +11,7 @@ import { addCommands, channelId, channelSender, type Args } from "./commands";
 import { importBookmarks } from "./browserBookmarks";
 import { importHistory } from "./browserHistory";
 import { cookieDetails, distinctDomains, firstImport, isGoogleCookie, type ReadCookie } from "./browserImportRules";
-import { importLogins, replaceLogins } from "./browserVault";
+import { importLogins, loginSite, replaceLogins } from "./browserVault";
 import { replaceFile } from "./durableStorage";
 import { note } from "./events";
 import { dev } from "./identity";
@@ -56,6 +56,8 @@ type Record = {
   bookmarks: number;
   passwords: number;
   passwordsSkipped: number;
+  /** Importing over this profile found no usable password, so the ones it had were left alone. */
+  passwordsKept: boolean;
   googleLeftOut: number;
 };
 /** What's kept of imports: each browser's last, each source profile's place here, and the notice seen. */
@@ -251,8 +253,10 @@ async function writeProfile({ token, target, replace, progress }: Args, sender: 
   let passwordsError = read.passwordsError;
   let passwords = 0;
   let passwordsSkipped = read.loginsLeftOut;
-  // Importing over a profile swaps its passwords, so a source with none leaves it with none.
-  if (read.passwordsRead && (replacing || read.logins.length > 0)) {
+  // replaceLogins with nothing usable would empty the profile, so that swap doesn't happen.
+  const passwordsKept = replacing && read.passwordsRead && !read.logins.some((login) => loginSite(login.url) && login.password);
+  if (passwordsKept) passwordsSkipped += read.logins.length;
+  else if (read.logins.length > 0) {
     try {
       const counts = await (replacing ? replaceLogins : importLogins)(profileId, read.logins);
       passwords = counts.added + counts.updated + counts.unchanged;
@@ -275,6 +279,7 @@ async function writeProfile({ token, target, replace, progress }: Args, sender: 
     bookmarks,
     passwords,
     passwordsSkipped,
+    passwordsKept,
     googleLeftOut,
   };
   changeSaved((saved) => {

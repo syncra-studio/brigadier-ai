@@ -197,7 +197,7 @@ pub struct ReadProfile {
     pub history_error: Option<String>,
     pub bookmarks: Vec<Bookmark>,
     pub bookmarks_error: Option<String>,
-    /// The source's passwords were read, even if there are none: importing over a profile swaps them.
+    /// The source's passwords were read, even if there are none: importing over a profile can say it kept its own.
     pub passwords_read: bool,
     pub logins: Vec<Login>,
     pub logins_left_out: u32,
