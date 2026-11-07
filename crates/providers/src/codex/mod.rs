@@ -1423,7 +1423,13 @@ impl Provider for Codex {
                 .map(|server| server.name.clone())
                 .collect();
             let resumed = matches!(spec.origin, Origin::Resume { .. });
-            tokio::spawn(read_loop(rpc.clone(), stdout, shared.clone(), trusted, resumed));
+            tokio::spawn(read_loop(
+                rpc.clone(),
+                stdout,
+                shared.clone(),
+                trusted,
+                resumed,
+            ));
 
             let started = tokio::time::timeout(
                 START_TIMEOUT,

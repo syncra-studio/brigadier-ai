@@ -28,7 +28,10 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use brigadier_providers::{ApprovalKind, ApprovalRequest, ErrorKind, InputPart, Origin, ProviderError, TurnInput, TurnStatus};
+use brigadier_providers::{
+    ApprovalKind, ApprovalRequest, ErrorKind, InputPart, Origin, ProviderError, TurnInput,
+    TurnStatus,
+};
 
 use super::once::{mark_in, marked_once, once_mark, without_mark};
 use super::{TaskLive, TaskLiveState, explicitly_paused};
@@ -999,7 +1002,10 @@ pub(super) fn own_note_request(record: &Path, request: &ApprovalRequest) -> bool
     match request.kind {
         ApprovalKind::FileChange => {
             !request.paths.is_empty()
-                && request.paths.iter().all(|path| is_note_of(&handoff, Path::new(path)))
+                && request
+                    .paths
+                    .iter()
+                    .all(|path| is_note_of(&handoff, Path::new(path)))
         }
         ApprovalKind::Command => request
             .command
@@ -1017,7 +1023,10 @@ fn is_note_of(handoff: &Path, path: &Path) -> bool {
         .and_then(|name| name.to_str())
         .and_then(|name| name.strip_suffix(".md"))
         .is_some_and(|stem| !stem.is_empty() && stem.bytes().all(|byte| byte.is_ascii_digit()));
-    let same_folder = match (path.parent().map(Path::canonicalize), handoff.canonicalize()) {
+    let same_folder = match (
+        path.parent().map(Path::canonicalize),
+        handoff.canonicalize(),
+    ) {
         (Some(Ok(parent)), Ok(folder)) => parent == folder,
         _ => false,
     };
@@ -1031,7 +1040,9 @@ fn makes_folder(handoff: &Path, command: &str) -> bool {
     let bare = ["/bin/zsh -c ", "/bin/bash -c ", "/bin/sh -c "]
         .iter()
         .find_map(|shell| command.strip_prefix(shell))
-        .map_or(command, |quoted| quoted.trim_matches(|c| c == '\'' || c == '"'));
+        .map_or(command, |quoted| {
+            quoted.trim_matches(|c| c == '\'' || c == '"')
+        });
     let Some(folder) = bare.strip_prefix("mkdir -p ") else {
         return false;
     };
@@ -1069,7 +1080,8 @@ mod note_request_tests {
         let handoff = record.join("handoff");
         std::fs::create_dir_all(&handoff).unwrap();
         std::fs::write(root.join("secret.md"), "").unwrap();
-        let write = |path: &Path| own_note_request(&record, &asks(ApprovalKind::FileChange, &[path], None));
+        let write =
+            |path: &Path| own_note_request(&record, &asks(ApprovalKind::FileChange, &[path], None));
         assert!(write(&handoff.join("1.md")));
         assert!(write(&handoff.join("12.md")));
         // Elsewhere, another name, or out of the folder by its path.
@@ -1088,16 +1100,25 @@ mod note_request_tests {
         // With another file, it asks.
         assert!(!own_note_request(
             &record,
-            &asks(ApprovalKind::FileChange, &[&handoff.join("1.md"), &root.join("secret.md")], None),
+            &asks(
+                ApprovalKind::FileChange,
+                &[&handoff.join("1.md"), &root.join("secret.md")],
+                None
+            ),
         ));
-        let run = |command: &str| own_note_request(&record, &asks(ApprovalKind::Command, &[], Some(command)));
+        let run = |command: &str| {
+            own_note_request(&record, &asks(ApprovalKind::Command, &[], Some(command)))
+        };
         let folder = handoff.display();
         assert!(run(&format!("mkdir -p {folder}")));
         assert!(run(&format!("/bin/zsh -c 'mkdir -p {folder}'")));
         assert!(!run(&format!("mkdir -p {folder}; rm -rf /")));
         assert!(!run(&format!("/bin/zsh -c 'mkdir -p {folder} && curl x'")));
         assert!(!run("mkdir -p /tmp"));
-        assert!(!own_note_request(&record, &asks(ApprovalKind::Tool, &[&handoff.join("1.md")], None)));
+        assert!(!own_note_request(
+            &record,
+            &asks(ApprovalKind::Tool, &[&handoff.join("1.md")], None)
+        ));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

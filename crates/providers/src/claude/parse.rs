@@ -1892,7 +1892,11 @@ fn exit_header(output: &str) -> Option<(i32, &str)> {
 /// The tokens of a result's cumulative `modelUsage`, over all its models.
 fn model_usage_sum(models: &Value) -> TokenUsage {
     let mut sum = TokenUsage::default();
-    for model in models.as_object().into_iter().flat_map(|models| models.values()) {
+    for model in models
+        .as_object()
+        .into_iter()
+        .flat_map(|models| models.values())
+    {
         let int = |key: &str| model.get(key).and_then(Value::as_i64).unwrap_or_default();
         sum.input_tokens += int("inputTokens");
         sum.cached_input_tokens += int("cacheReadInputTokens");

@@ -2809,7 +2809,10 @@ mod tests {
         assert_eq!(usage(&repeated), None);
         assert!(repeated.iter().any(|event| matches!(
             event,
-            ProviderEvent::ContextSize { used_tokens: 100, .. }
+            ProviderEvent::ContextSize {
+                used_tokens: 100,
+                ..
+            }
         )));
         events(
             &mut parser,

@@ -973,15 +973,11 @@ impl SessionManager {
         }
         let after = i64::try_from(NET_AFTER.as_millis()).unwrap_or(i64::MAX);
         let now = now_ms();
-        let due = self
-            .worker_events
-            .kept(id, &record)
-            .iter()
-            .any(|kept| {
-                kept.held.is_none()
-                    && !rides_along(kept)
-                    && now.saturating_sub(kept.event.at_ms) >= after
-            });
+        let due = self.worker_events.kept(id, &record).iter().any(|kept| {
+            kept.held.is_none()
+                && !rides_along(kept)
+                && now.saturating_sub(kept.event.at_ms) >= after
+        });
         if !due {
             return;
         }
@@ -1384,7 +1380,11 @@ mod tests {
         events.push(&id, &scratch.0, &task, None, event(EventKind::FreshContext));
         events.push(&id, &scratch.0, &task, None, event(EventKind::NeedsInput));
         let stale = |kept: &Kept| kept.event.event == EventKind::NeedsInput;
-        assert!(events.hold_wake(&id, &scratch.0, &by, all, stale).is_empty());
+        assert!(
+            events
+                .hold_wake(&id, &scratch.0, &by, all, stale)
+                .is_empty()
+        );
         assert_eq!(events.kept(&id, &scratch.0).len(), 1);
         assert_eq!(events.kept(&id, &scratch.0)[0].held, None);
     }
