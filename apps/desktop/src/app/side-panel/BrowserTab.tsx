@@ -8,6 +8,8 @@ import { followLayout } from "../conversation/pageWatch";
 import { type BrowserKey, browserKey, stepZoom } from "../conversation/browserKeys";
 import { DownloadsButton, PermissionPrompt } from "./BrowserToolbarPopovers";
 import { ProfileButton } from "./ProfileButton";
+import { BookmarkStar } from "./BookmarkStar";
+import { BrowserPasswordsPrompts } from "@/app/settings/BrowserPasswordsPrompts";
 import { BrowserOptions } from "./BrowserOptions";
 import { FindBar } from "./FindBar";
 import { NavigationCapsule } from "./NavigationCapsule";
@@ -462,6 +464,7 @@ export function BrowserTab({
                 focused ? "text-start" : "text-center",
               )}
             />
+            {!editing && embedded && <BookmarkStar tab={conversationId} url={url} title={page?.title ?? ""} />}
             {outside && (url || typed !== null) && (
               <TooltipIconButton
                 type="button"
@@ -549,6 +552,7 @@ export function BrowserTab({
         data-slot="browser-page"
         className="flex min-h-0 w-full flex-1"
       >
+        {embedded && active && <BrowserPasswordsPrompts tab={conversationId} anchor={area} />}
         {!made && (children ?? (
           <div className="text-muted-foreground m-auto p-6 text-center text-sm">
             <Globe aria-hidden className="mx-auto mb-3 size-6" />

@@ -15,6 +15,7 @@ import { devToolsChanged, userUsed } from "@/state/agentPause";
 
 import { dropOverlay, installAgentOverlays, placeOverlay } from "./agentOverlay";
 import { watchUserComposition } from "./agentFocusGuard";
+import { installGuestLogins } from "./guestLogins";
 import { readFavicon } from "./pageFavicon";
 
 declare global {
@@ -31,6 +32,9 @@ declare global {
       onGuestPermission(listener: (details: { from: number; request: number; origin: string; camera: boolean; microphone: boolean }) => void): void;
       onGuestEscape(listener: (details: { from: number }) => void): void;
       onGuestKey(listener: () => void): void;
+      vault(op: string, args?: unknown): Promise<unknown>;
+      bookmarks(op: string, args?: unknown): Promise<unknown>;
+      onGuestLogin(listener: (details: { from: number; kind: string; id?: string; profile?: string; site?: string; username?: string; update?: boolean }) => void): void;
       devControl(op: string, args?: unknown): Promise<unknown>;
       agent(call: Record<string, unknown>): Promise<unknown>;
       onAgentEvent(listener: (details: { from: number; event: "devtools-opened" | "devtools-closed" | "detached" }) => void): void;
@@ -156,6 +160,7 @@ export function installTabLayer(): void {
   installKeyboardHandover();
   installAgentOverlays();
   watchUserComposition();
+  installGuestLogins((from) => [...pages.values()].find((page) => page.ready && page.element.getWebContentsId() === from)?.id ?? null);
 
   // A drag anywhere in the app must not fall into a page it crosses: the divider's or a text
   // selection's pointer stays with the app until it's let go.

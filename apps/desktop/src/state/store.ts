@@ -44,7 +44,7 @@ export type SettingsPageId =
   | "browserImport";
 
 /** A nested Settings page is a destination; dialogs and list filters are not. */
-export type BrowserSubView = "history" | "downloads" | "sites" | "profile";
+export type BrowserSubView = "history" | "downloads" | "sites" | "profile" | "passwords" | "bookmarks";
 export type SettingsSelection = { type: "settings" } & (
   | { page: SettingsPageId; detail?: never }
   | { page: "providers"; detail: { provider: ProviderKind } }
