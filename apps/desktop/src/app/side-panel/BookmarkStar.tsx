@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { TooltipIconButton } from "@/components/controls";
-import { Star } from "@/components/icons";
+import { Star, StarFilled } from "@/components/icons";
 import { bookmarkPage, isBookmarked, unbookmarkPage, useBookmarkChanges } from "@/state/browserBookmarks";
 import { tabProfileId, useProfilePlaces } from "@/state/browserProfilePlaces";
 import { toast } from "@/state/toasts";
@@ -31,7 +31,7 @@ export function BookmarkStar({ tab, url, title }: { tab: string; url: string; ti
       size="icon-md"
       data-slot="bookmark-star"
       aria-pressed={marked}
-      className="shrink-0 rounded-full @max-lg/browser-toolbar:hidden"
+      className="shrink-0 rounded-full @max-md/browser-toolbar:hidden"
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => {
         (marked ? unbookmarkPage(profile, url) : bookmarkPage(profile, url, title)).catch((cause: unknown) =>
@@ -39,7 +39,7 @@ export function BookmarkStar({ tab, url, title }: { tab: string; url: string; ti
         );
       }}
     >
-      <Star className={marked ? "fill-current" : undefined} />
+      {marked ? <StarFilled /> : <Star />}
     </TooltipIconButton>
   );
 }
