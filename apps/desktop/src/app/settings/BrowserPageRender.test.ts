@@ -15,7 +15,7 @@ test("browser settings: rows, clear, history, downloads, sites, off", { timeout:
   const seen = JSON.parse(await renderFixturePage(t, "browser.html?drive=1", "browser-result", 20000)) as Record<string, unknown>;
   assert.deepEqual(seen.on, {
     title: "Browser",
-    sections: ["Profiles", "General", "Downloads", "Browser permissions"],
+    sections: ["Profiles", "General", "Passwords and bookmarks", "Downloads", "Browser permissions"],
     rows: [
       "Browser",
       "New sessions start on",
@@ -24,6 +24,8 @@ test("browser settings: rows, clear, history, downloads, sites, off", { timeout:
       "Show full URL",
       "Browsing data",
       "Browsing history",
+      "Saved passwords",
+      "Bookmarks",
       "Location",
       "Ask where to save downloads",
       "Download history",
