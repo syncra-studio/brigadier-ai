@@ -19,6 +19,7 @@ pub(crate) fn items(
     let mut items = Vec::new();
     let mut occurrences = HashMap::<String, usize>::new();
     let mut tools = HashMap::<String, String>::new();
+    let mut thought_in = std::collections::HashSet::<String>::new();
     let mut push = |id: String,
                     role: &'static str,
                     tool: Option<String>,
@@ -162,6 +163,25 @@ pub(crate) fn items(
         }
         for block in blocks {
             match string(block, "type") {
+                // The model's reply when it comes as a second thinking block (the parser's
+                // `spoken_thinking`); a first is thinking, never read out.
+                Some("thinking") => {
+                    let first =
+                        string(message, "id").is_none_or(|id| thought_in.insert(id.to_owned()));
+                    let text = string(block, "thinking").unwrap_or_default().trim_end();
+                    if !first && !text.is_empty() {
+                        push(
+                            native.clone(),
+                            role,
+                            None,
+                            "message",
+                            text.to_owned(),
+                            None,
+                            at_ms,
+                            at,
+                        );
+                    }
+                }
                 Some("tool_use") => {
                     let Some(id) = string(block, "id") else {
                         continue;
@@ -252,4 +272,48 @@ pub(crate) fn sources(path: &Path) -> Vec<(Option<String>, PathBuf)> {
         sources.push((scope, file));
     }
     sources
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// `brigadier transcript` reads a message's second thinking block as its reply, and never
+    /// reads the first, as the file keeps them: a line per block.
+    #[test]
+    fn a_second_thinking_block_reads_as_the_reply() {
+        let line = |uuid: &str, block: Value| {
+            (
+                None,
+                json!({"type": "assistant", "uuid": uuid,
+                    "message": {"id": "m", "role": "assistant", "content": [block]}}),
+            )
+        };
+        let thinking = |text: &str| json!({"type": "thinking", "thinking": text, "signature": "s"});
+        let read = items(
+            &[
+                line("a", thinking("Weighing it.\n\n")),
+                line("b", thinking("Found the cause.\n\n")),
+                line(
+                    "c",
+                    json!({"type": "tool_use", "id": "t", "name": "AskUserQuestion", "input": {}}),
+                ),
+            ],
+            &[],
+            &|_| None,
+        );
+        let read: Vec<_> = read
+            .iter()
+            .map(|item| (item.id.as_str(), item.role, item.kind, item.text.as_str()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("b", "assistant", "message", "Found the cause."),
+                ("t", "tool", "call", "{}"),
+            ]
+        );
+    }
 }

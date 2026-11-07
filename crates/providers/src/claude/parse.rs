@@ -87,6 +87,8 @@ pub struct Parser {
     /// A session reported its own start; `system/init` is then not a start.
     started: bool,
     message_id: Option<String>,
+    /// The first thinking block of the newest message with one: its message and its item.
+    first_thinking: Option<(String, String)>,
     blocks: HashMap<u64, OpenBlock>,
     /// Final messages seen per message id, for streams without partial messages.
     finals: HashMap<String, u64>,
@@ -282,7 +284,7 @@ impl Parser {
             Some("content_block_start") => {
                 let index = event.get("index").and_then(Value::as_u64).unwrap_or(0);
                 let block = event.get("content_block").cloned().unwrap_or(Value::Null);
-                let kind = match str_of(&block, "type") {
+                let mut kind = match str_of(&block, "type") {
                     Some("text") => BlockKind::Text,
                     Some("thinking") => BlockKind::Thinking,
                     Some("tool_use" | "server_tool_use" | "mcp_tool_use") => BlockKind::Tool {
@@ -295,6 +297,12 @@ impl Parser {
                     BlockKind::Tool { id, .. } => id.clone(),
                     _ => self.block_item_id(index),
                 };
+                if matches!(kind, BlockKind::Thinking) {
+                    let message = self.message_id.clone().unwrap_or_else(|| "message".into());
+                    if self.spoken_thinking(&message, &item_id) {
+                        kind = BlockKind::Text;
+                    }
+                }
                 // Tool input (especially a delegation spec) may take seconds to generate.
                 // Show the call immediately; its final block fills in the input once ready.
                 if let BlockKind::Tool { id, name } = &kind
@@ -331,7 +339,14 @@ impl Parser {
                     }
                     Some("thinking_delta") => {
                         let text = str_of(&delta, "thinking").unwrap_or_default();
-                        if !text.is_empty() {
+                        if text.is_empty() {
+                        } else if matches!(block.kind, BlockKind::Text) {
+                            out.push(Output::Event(ProviderEvent::MessageDelta {
+                                item_id: block.item_id.clone(),
+                                text: text.to_owned(),
+                                phase: None,
+                            }));
+                        } else {
                             out.push(Output::Event(ProviderEvent::ReasoningDelta {
                                 item_id: block.item_id.clone(),
                                 text: text.to_owned(),
@@ -469,7 +484,15 @@ impl Parser {
                 }
                 Some("thinking") => {
                     let text = str_of(block, "thinking").unwrap_or_default();
-                    if !text.is_empty() {
+                    let spoken = self.spoken_thinking(&message_id, &item_id);
+                    if text.is_empty() {
+                    } else if spoken {
+                        out.push(Output::Event(ProviderEvent::Message {
+                            item_id,
+                            role: Role::Assistant,
+                            text: text.trim_end().to_owned(),
+                        }));
+                    } else {
                         out.push(Output::Event(ProviderEvent::Reasoning {
                             item_id,
                             text: text.to_owned(),
@@ -482,6 +505,20 @@ impl Parser {
                     self.tool_started(item_id, name, input, out);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// Whether a thinking block is the model's reply: Opus 5.5 sometimes writes what it says
+    /// beside a tool call as a second thinking block, in place of a text block, and nothing else
+    /// would show those words. A message has never had a third, or text beside a second (0 of
+    /// 3,013 across a user's transcripts), so the second is the last and streams as the reply.
+    fn spoken_thinking(&mut self, message_id: &str, item_id: &str) -> bool {
+        match &self.first_thinking {
+            Some((message, first)) if message == message_id => first != item_id,
+            _ => {
+                self.first_thinking = Some((message_id.to_owned(), item_id.to_owned()));
+                false
             }
         }
     }
@@ -4238,5 +4275,93 @@ mod tests {
             _ => None,
         });
         assert_eq!(input, Some(1));
+    }
+
+    /// Opus 5.5 can write its reply as a second thinking block (recorded from Claude Code
+    /// 2.1.319): live and read back from the file, it is a reply and the first stays thinking.
+    #[test]
+    fn a_second_thinking_block_is_the_reply_live_and_read_back() {
+        let block = |thinking: &str| {
+            json!({"type": "assistant", "message": {"id": "m", "content": [
+            {"type": "thinking", "thinking": thinking, "signature": "signed"}]}})
+        };
+        let call = json!({"type": "assistant", "message": {"id": "m", "content": [
+            {"type": "tool_use", "id": "t", "name": "AskUserQuestion", "input": {}}]}});
+        let stream = |event: Value| json!({"type": "stream_event", "event": event});
+        let open = |index: u64, kind: &str| {
+            stream(json!({"type": "content_block_start", "index": index,
+                "content_block": {"type": kind, "thinking": "", "signature": ""}}))
+        };
+        let delta = |index: u64, thinking: &str| {
+            stream(json!({"type": "content_block_delta", "index": index,
+                "delta": {"type": "thinking_delta", "thinking": thinking}}))
+        };
+        let stop = |index: u64| stream(json!({"type": "content_block_stop", "index": index}));
+        let said = |outputs: Vec<Output>| {
+            outputs
+                .into_iter()
+                .filter_map(|output| match output {
+                    Output::Event(
+                        event @ (ProviderEvent::Reasoning { .. }
+                        | ProviderEvent::ReasoningDelta { .. }
+                        | ProviderEvent::Message { .. }
+                        | ProviderEvent::MessageDelta { .. }),
+                    ) => Some(event),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let thought = || ProviderEvent::Reasoning {
+            item_id: "m:0".into(),
+            text: "Weighing it.\n\n".into(),
+        };
+        let reply = || ProviderEvent::Message {
+            item_id: "m:1".into(),
+            role: Role::Assistant,
+            text: "Found the cause.".into(),
+        };
+
+        let mut live = Parser::live();
+        let mut outputs = Vec::new();
+        for line in [
+            stream(json!({"type": "message_start", "message": {"id": "m"}})),
+            open(0, "thinking"),
+            delta(0, "Weighing it.\n\n"),
+            block("Weighing it.\n\n"),
+            stop(0),
+            open(1, "thinking"),
+            delta(1, "Found the cause.\n\n"),
+            block("Found the cause.\n\n"),
+            stop(1),
+        ] {
+            outputs.extend(live.feed(&line.to_string()));
+        }
+        assert_eq!(
+            said(outputs),
+            [
+                ProviderEvent::ReasoningDelta {
+                    item_id: "m:0".into(),
+                    text: "Weighing it.\n\n".into(),
+                },
+                thought(),
+                ProviderEvent::MessageDelta {
+                    item_id: "m:1".into(),
+                    text: "Found the cause.\n\n".into(),
+                    phase: None,
+                },
+                reply(),
+            ]
+        );
+
+        let mut file = Parser::replay();
+        let mut outputs = Vec::new();
+        for line in [
+            block("Weighing it.\n\n"),
+            block("Found the cause.\n\n"),
+            call,
+        ] {
+            outputs.extend(file.feed(&line.to_string()));
+        }
+        assert_eq!(said(outputs), [thought(), reply()]);
     }
 }
