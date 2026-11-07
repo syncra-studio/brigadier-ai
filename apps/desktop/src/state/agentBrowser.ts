@@ -5,11 +5,13 @@ import {
   browserAgentDrive,
   browserAgentEvents,
   browserAgentLoad,
+  browserAgentSignInStop,
   browserGo,
 } from "@/ipc/client";
 import type { AppCall, BrowserBounds, BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult, BrowserSensitive } from "@/ipc/generated";
 import { devToolsOpen, driverOf, isPaused, useAgentPause } from "@/state/agentPause";
 import { openPage, useBrowsers } from "@/state/browsers";
+import { askedOf, signInCleared, type SignInStop, stopAgent, stoppedWords } from "@/state/browserSignIn";
 import {
   type BrowserDriver,
   type BrowserTabState,
@@ -44,6 +46,8 @@ export type PageHands = {
   /** An agent begins acting in the tab, or stops: its hold of the page starts and ends with this. */
   drive: (tab: string, on: boolean) => Promise<void>;
   events: (tab: string, since: number, kinds: readonly string[]) => Promise<BrowserActivity>;
+  /** Whether the page is for the user alone; the Electron shell's. */
+  signInStop?: (tab: string) => Promise<SignInStop | null>;
 };
 
 const shell: PageHands = {
@@ -54,6 +58,7 @@ const shell: PageHands = {
   capture: browserAgentCapture,
   drive: browserAgentDrive,
   events: browserAgentEvents,
+  signInStop: browserAgentSignInStop,
 };
 
 /**
@@ -354,6 +359,8 @@ async function settled(tab: string): Promise<void> {
 
 /** The tab's page, read for the agent. */
 async function page(tab: string, hands: PageHands): Promise<BrowserResult> {
+  const stopped = await stoppedAt(tab, hands);
+  if (stopped) return stopped;
   const answer = await hands.script(tab, { kind: "read", max: READ_MOST });
   if (devToolsOpen(tab)) return failed(PAUSED_DEVTOOLS);
   const error = errorOf(answer);
@@ -368,6 +375,31 @@ async function page(tab: string, hands: PageHands): Promise<BrowserResult> {
     text: read.text,
   };
   return { result: "page", tab, page: result, user: false };
+}
+
+/**
+ * What the agent hears on a page that stops it: the action it asked for is done, so this is its answer and not `paused`,
+ * which the daemon would run again after Continue. Its next call on the tab waits.
+ */
+async function stoppedAt(tab: string, hands: PageHands): Promise<BrowserResult | null> {
+  const owner = driverOf(tab);
+  if (!owner) return null;
+  let stop = askedOf(tab);
+  if (!stop && !isPaused(tab)) {
+    const found = (await hands.signInStop?.(tab)) ?? null;
+    if (!found) signInCleared(tab);
+    else if (stopAgent(tab, found)) stop = found;
+  }
+  if (!stop) return null;
+  const shown = useBrowsers.getState().pages[tab];
+  const read: BrowserPageRead = {
+    url: shown?.url ?? "",
+    title: shown?.title ?? "",
+    generation: shown?.generation ?? 0,
+    loading: shown?.loading ?? false,
+    text: stoppedWords(stop, tab).agent,
+  };
+  return { result: "page", tab, page: read, user: false };
 }
 
 /** `bytes` as base64. */

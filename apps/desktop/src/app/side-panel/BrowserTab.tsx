@@ -32,6 +32,7 @@ import {
   zoomPage,
 } from "@/state/browsers";
 import { handBack, pageShows, useAgentPause, userUsed } from "@/state/agentPause";
+import { dismissSignInRejected, type SignInStop, useSignInRejected } from "@/state/browserSignIn";
 import { useBrowserOn } from "@/state/links";
 import { selectTab, sessionWith, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -95,6 +96,15 @@ function failed(cause: unknown) {
   });
 }
 
+/** Why a tab's agent stopped for the user at a page only they can go through. */
+function SignInStopWords({ stop, driver }: { stop: SignInStop; driver: string }) {
+  const who = <span className="font-medium">{driver}</span>;
+  if (stop.kind === "rejected") return <>Google refused this sign-in, so {who} stopped. Press Continue to hand the page back.</>;
+  if (stop.kind === "captcha") return <>This page shows a captcha, so {who} stopped. Solve it, then press Continue.</>;
+  if (stop.window) return <>A sign-in window opened, so {who} stopped. Finish in that window, then press Continue.</>;
+  return <>This page asks you to sign in, so {who} stopped. Agents don't sign in: do it here, then press Continue.</>;
+}
+
 function openOutside(url: string) {
   openUrl(url).catch(failed);
 }
@@ -134,6 +144,8 @@ export function BrowserTab({
   const page = useBrowsers((s) => s.pages[conversationId]);
   const paused = useAgentPause((s) => conversationId in s.paused);
   const devtoolsOpen = useAgentPause((s) => conversationId in s.devtools);
+  const signInStop = useAgentPause((s) => s.asked[conversationId]);
+  const signInRejected = useSignInRejected((s) => conversationId in s);
   const driver = useSessionTabs((s) => driverLabel(s.sessions, conversationId));
   const embedded = useApp((s) => s.info?.platform !== "linux");
   const mac = useApp((s) => s.info?.platform === "macos");
@@ -518,10 +530,23 @@ export function BrowserTab({
           data-slot="browser-paused"
           text={devtoolsOpen
             ? <>DevTools is open on this page, so <span className="font-medium">{driver}</span> is waiting. Close it to hand the page back.</>
-            : <>You're using this page, so <span className="font-medium">{driver}</span> is waiting.</>}
+            : signInStop
+              ? <SignInStopWords stop={signInStop} driver={driver} />
+              : <>You're using this page, so <span className="font-medium">{driver}</span> is waiting.</>}
         >
           <Button size="sm" disabled={devtoolsOpen} onClick={() => handBack(conversationId)}>
             Continue
+          </Button>
+        </Banner>
+      )}
+      {signInRejected && (
+        <Banner
+          data-slot="browser-signin-rejected"
+          text={<><span className="font-medium">Google refused this sign-in.</span> It decides which browsers it allows and has decided against this one. Your account and password are fine, but trying again here will probably get the same answer. Use your usual browser for this site if you need it now.</>}
+          onDismiss={() => dismissSignInRejected(conversationId)}
+        >
+          <Button size="sm" variant="ghost" onClick={() => openOutside("https://accounts.google.com/")}>
+            Open in browser
           </Button>
         </Banner>
       )}

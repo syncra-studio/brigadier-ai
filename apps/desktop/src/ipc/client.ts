@@ -1,3 +1,4 @@
+import type { SignInStop } from "@/state/browserSignIn";
 import type {
   AppInfo,
   BridgeEvent,
@@ -371,6 +372,11 @@ export function browserAgentCapture(id: string): Promise<ArrayBuffer> {
 /** An agent has the Browser tab `id` or doesn't; `resumed`: it has it back from the user, with Continue. */
 export function browserAgentDrive(id: string, on: boolean, resumed = false): Promise<void> {
   return invoke("browser_agent_drive", { id, on, resumed });
+}
+
+/** Whether the Browser tab `id`'s page is for the user alone: a sign-in or a captcha. The Electron shell's. */
+export function browserAgentSignInStop(id: string): Promise<SignInStop | null> {
+  return invoke<SignInStop | null>("browser_agent_sign_in_stop", { id });
 }
 
 /** What happened in the Browser tab `id` after `since`: its pages, network and console. */

@@ -78,6 +78,10 @@ export function agentLoad(id: string, url: string): void {
   loadPage(id, url);
 }
 
+export function agentSignInStop(id: string): Promise<unknown> {
+  return agent({ call: "signInStop", guest: agentPage(id).guest });
+}
+
 export function agentEvents(id: string, since: number, kinds: readonly string[]): Promise<unknown> {
   return agent({ call: "events", guest: agentPage(id).guest, since, kinds });
 }

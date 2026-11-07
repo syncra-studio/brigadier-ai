@@ -66,10 +66,6 @@ export function installBrowserHost(): void {
       if (unfocused) contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
       installGuestKeys(contents);
       watchGuest(contents);
-      contents.ipc.on("brigadier:guest-passkey-refused", () => {
-        note("guest-passkey-refused", { webContents: contents.id });
-        contents.hostWebContents?.send("brigadier:guest-passkey", { from: contents.id });
-      });
       contents.on("did-start-navigation", (details) => {
         if (details.isMainFrame) note("guest-navigation", { webContents: contents.id, url: details.url, inPlace: details.isSameDocument, reload: contents.getURL() === details.url });
       });
@@ -83,7 +79,8 @@ export function installBrowserHost(): void {
       }
       delete preferences.preload;
       preferences.nodeIntegration = false;
-      preferences.nodeIntegrationInSubFrames = false;
+      // Sandboxed, so no Node reaches any frame: this only lets the passkey preload run in subframes too.
+      preferences.nodeIntegrationInSubFrames = true;
       preferences.contextIsolation = true;
       preferences.sandbox = true;
       preferences.webSecurity = true;
