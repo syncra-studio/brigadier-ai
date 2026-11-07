@@ -144,7 +144,7 @@ export async function openPage(
       else if (event.type === "closed") closeTabAnywhere(id);
       else if (event.type === "permission") {
         const { request, origin, camera, microphone, location } = event;
-        update(id, { asking: { request, origin, camera, microphone, location } });
+        update(id, { asking: { request, origin, camera, microphone, ...(location ? { location } : {}) } });
       }
       else if (event.type === "permissionRefused") update(id, { osRefused: { origin: event.origin, refused: event.refused as OsRefused[] } });
       else if (event.type === "blocked") update(id, { blocked: event.url, loading: false });

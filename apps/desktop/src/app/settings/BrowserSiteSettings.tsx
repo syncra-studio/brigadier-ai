@@ -58,7 +58,7 @@ export function BrowserSiteSettings({ profile: opened, onBack }: { profile?: str
           </SettingsRow>
         </SettingsCard>
       </SettingsSection>
-      <SettingsSection title="Camera and microphone">
+      <SettingsSection title="Camera, microphone and location">
         <ErrorLine error={error} />
         {sites && sites.length === 0 ? (
           <SettingsCard>

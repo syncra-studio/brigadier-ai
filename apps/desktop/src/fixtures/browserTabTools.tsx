@@ -80,6 +80,9 @@ mockIPC(async (command, payload) => {
     case "reveal_path":
       asked.push({ reveal: args.path });
       return null;
+    case "browser_permission_settings":
+      asked.push({ settings: args.device });
+      return null;
     case "browser_permission":
       asked.push({ permission: args.request, answer: args.answer });
       return null;
@@ -133,6 +136,8 @@ const rows = () =>
 const prompt = () => one('[data-slot="browser-permission"]');
 const ask = (asking: BrowserAsking | null, tab = ID) =>
   useBrowsers.setState(({ pages }) => ({ pages: { ...pages, [tab]: { ...pages[tab]!, asking } } }));
+const refuse = (origin: string | null) =>
+  useBrowsers.setState(({ pages }) => ({ pages: { ...pages, [ID]: { ...pages[ID]!, osRefused: origin ? { origin, refused: ["location"] } : null } } }));
 const showTab = (tab: string) =>
   useSessionTabs.setState(({ sessions }) => ({ sessions: { ...sessions, session: { ...sessions.session!, active: tab } } }));
 const LAYERS = "[role=dialog], [role=alertdialog], [data-radix-popper-content-wrapper]";
@@ -282,6 +287,35 @@ function Fixture() {
       const behindShown = prompt() !== null;
       ask(null, OTHER);
       seen.ownTabOnly = { awayShown, back, behindShown, asked: asked.slice(hidden) };
+
+      // Location asks in the same card. What the system then refuses is said by name, for the tab's own site only,
+      // with the way to its settings on a Mac.
+      ask({ request: 14, origin: "https://meet.example", camera: false, microphone: false, location: true });
+      await until(() => prompt() !== null);
+      seen.locationAsked = text(prompt()).replace(/\s+/g, " ");
+      ask(null);
+      await until(() => prompt() === null);
+      const notice = () => one('[data-slot="browser-permission-refused"]');
+      const settingsAsked = asked.length;
+      const here = new URL(useBrowsers.getState().pages[ID]!.url).origin;
+      refuse(here);
+      await until(() => notice() !== null);
+      const mac = text(notice()).replace(/\s+/g, " ");
+      button("Open System Settings", notice() ?? document)?.click();
+      await until(() => notice() === null);
+      refuse("https://elsewhere.example");
+      await wait(100);
+      const otherSite = notice() !== null;
+      // Any system but a Mac: not "linux", where BrowserTab has no embedded page to show it over today.
+      useApp.setState((state) => ({ info: { ...state.info, platform: "windows" } as typeof state.info }));
+      refuse(here);
+      await until(() => notice() !== null);
+      const notMac = text(notice()).replace(/\s+/g, " ");
+      const notMacButtons = all("button", notice() ?? document).map((element) => text(element.querySelector(".sr-only")) || text(element));
+      refuse(null);
+      useApp.setState((state) => ({ info: { ...state.info, platform: "macos" } as typeof state.info }));
+      await until(() => notice() === null);
+      seen.osRefused = { mac, settings: asked.slice(settingsAsked), otherSite, notMac, notMacButtons };
 
       // Downloads: the newest, each finished one to open or show in Finder, and all of them.
       const downloadsAsked = asked.length;

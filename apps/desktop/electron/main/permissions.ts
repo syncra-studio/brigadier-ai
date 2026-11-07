@@ -4,11 +4,12 @@
 import type { Session, WebContents } from "electron";
 
 import { handleFromApp } from "./appPage";
-import { locationAvailable, openOsSettings, type OsDevice, osStatus, refusedByOs } from "./browserPermissionsOs";
+import { openOsSettings, type OsDevice, osStatus, refusedByOs } from "./browserPermissionsOs";
+import { answerFromOs, cardAllows, type CardAnswer, checkAllows, decideRequest, savedFromCard } from "./browserPermissionsRules";
 
 import type { Note } from "./events";
 import { isDeleting, setSiteChoice, siteAsked, siteChoice } from "./profileStore";
-import { profileOfStorage, type SiteAsk, siteAnswer } from "./profiles";
+import { profileOfStorage, type SiteAsk } from "./profiles";
 
 const ALLOWED = new Set<string>(["fullscreen", "clipboard-sanitized-write", "pointerLock"]);
 
@@ -27,16 +28,16 @@ function originOf(url: string): string | null {
   }
 }
 
-/** The system's own question comes only after the person's yes to ours: the first thing they see is ours. A refusal goes to the page at once, and to the tab by name. */
+/** The system's own question comes only after the person's yes to ours: the first thing they see is ours. */
 function grant(guest: WebContents, origin: string, asked: SiteAsk, answer: (allowed: boolean) => void, note: Note): void {
-  refusedByOs(asked).then(
-    (refused) => {
-      note("permission-os", { origin, asked, refused, os: osStatus(asked) });
-      if (refused.length > 0 && !guest.isDestroyed()) guest.hostWebContents?.send("brigadier:guest-permission-refused", { from: guest.id, origin, refused });
-      answer(refused.length === 0);
+  void answerFromOs({
+    refusedByOs: () => refusedByOs(asked),
+    log: (refused) => note("permission-os", { origin, asked, refused, os: osStatus(asked) }),
+    tell: (refused) => {
+      if (!guest.isDestroyed()) guest.hostWebContents?.send("brigadier:guest-permission-refused", { from: guest.id, origin, refused });
     },
-    () => answer(false),
-  );
+    answer,
+  });
 }
 
 function dropQuestions(guest: WebContents, unlessOrigin: string | null): void {
@@ -60,22 +61,20 @@ function watchGuest(guest: WebContents): void {
 
 function request(permission: string, profileId: string, guest: WebContents, requestingUrl: string, asked: SiteAsk, answer: (allowed: boolean) => void, note: Note): void {
   const origin = originOf(requestingUrl);
-  const top = originOf(guest.getURL());
   const host = guest.hostWebContents;
-  // A question names one site, the tab's: another site's frame asking gets no question, and a page with no tab no door.
-  if (!origin || origin !== top || !host || isDeleting(profileId)) {
+  const site = origin ? siteChoice(profileId, origin) : undefined;
+  const decided = decideRequest({ origin, top: originOf(guest.getURL()), hasTab: !!host, deleting: isDeleting(profileId), asked, site, platform: process.platform });
+  if (decided === "not-the-tabs-site" || !origin || !host) {
     note("permission-request", { permission, allowed: false, origin, reason: "not the tab's own site, or the profile is being deleted" });
     answer(false);
     return;
   }
-  // Before any card: a yes here couldn't bring a position.
-  if (asked.location && !locationAvailable()) {
+  if (decided === "no-location") {
     note("permission-request", { permission, profileId, origin, allowed: false, reason: "no location on this system" });
     host.send("brigadier:guest-permission-refused", { from: guest.id, origin, refused: ["location"] });
     answer(false);
     return;
   }
-  const decided = siteAnswer(siteChoice(profileId, origin), asked);
   note("permission-request", { permission, profileId, origin, asked, decided, os: osStatus(asked) });
   if (decided === "grant") {
     grant(guest, origin, asked, answer, note);
@@ -93,15 +92,14 @@ function request(permission: string, profileId: string, guest: WebContents, requ
 }
 
 export function installPermissionAnswers(): void {
-  // "visiting" is the card's Allow while visiting the site: saved for the site in this profile, as "never" is.
-  handleFromApp("brigadier:permission-answer", (_event, request: number, choice: "once" | "visiting" | "never" | "dismiss") => {
+  handleFromApp("brigadier:permission-answer", (_event, request: number, choice: CardAnswer) => {
     const question = questions.get(request);
     if (!question) return;
     questions.delete(request);
     const { guest, profileId, origin, asked, answer, note } = question;
-    const saved = choice === "visiting" ? "allow" : choice === "never" ? "block" : null;
-    if (saved) setSiteChoice(profileId, origin, { ...(asked.camera ? { camera: saved } : {}), ...(asked.microphone ? { microphone: saved } : {}), ...(asked.location ? { location: saved } : {}) });
-    if (choice === "once" || choice === "visiting") grant(guest, origin, asked, answer, note);
+    const saved = savedFromCard(choice, asked);
+    if (Object.keys(saved).length > 0) setSiteChoice(profileId, origin, saved);
+    if (cardAllows(choice)) grant(guest, origin, asked, answer, note);
     else answer(false);
   });
   handleFromApp("brigadier:permission-open-settings", (_event, device: OsDevice) => openOsSettings(device));
@@ -140,8 +138,7 @@ export function applyPermissionPolicy(session: Session, { note }: { note: Note }
       const device: SiteAsk = permission === "geolocation"
         ? { camera: false, microphone: false, location: true }
         : { camera: details.mediaType === "video", microphone: details.mediaType !== "video", location: false };
-      if (device.location && !locationAvailable()) return false;
-      return origin !== null && siteAnswer(siteChoice(profileId, origin), device) === "grant";
+      return checkAllows(origin, device, origin ? siteChoice(profileId, origin) : undefined, process.platform);
     }
     return ALLOWED.has(permission);
   });

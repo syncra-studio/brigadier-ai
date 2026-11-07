@@ -207,7 +207,7 @@ function Fixture() {
       },
       () => VIEWS.sites?.(),
       () => {
-        seen.sites = { title: text(document.querySelector("main h1")), choices: [text(button("Camera for http://localhost:3000")), text(button("Microphone for http://localhost:3000"))] };
+        seen.sites = { title: text(document.querySelector("main h1")), group: text(document.querySelector("main")).includes("Camera, microphone and location"), choices: [text(button("Camera for http://localhost:3000")), text(button("Microphone for http://localhost:3000")), text(button("Location for http://localhost:3000"))] };
         seen.siteEdges = all("main li").map(rowEdges);
         button("Browser")?.click();
       },

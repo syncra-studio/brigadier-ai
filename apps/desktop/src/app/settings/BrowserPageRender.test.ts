@@ -67,7 +67,7 @@ test("browser settings: rows, clear, history, downloads, sites, off", { timeout:
     title: "Download history",
     files: ["/Users/me/Downloads/report.pdf", "/Users/me/Downloads/big.zip"],
   });
-  assert.deepEqual(seen.sites, { title: "Site settings", choices: ["Ask", "Block"] });
+  assert.deepEqual(seen.sites, { title: "Site settings", group: true, choices: ["Ask", "Block", "Ask"] });
 
   // Every list's rows sit as far in from their card's edges as a Settings row does.
   const inset = seen.rowEdges as number[];

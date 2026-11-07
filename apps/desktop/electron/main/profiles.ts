@@ -51,3 +51,21 @@ export function siteAnswer(site: SiteChoice | undefined, asked: SiteAsk): SiteAn
   if (devices.some((device) => site?.[device] === "block")) return "deny";
   return devices.every((device) => site?.[device] === "allow") ? "grant" : "ask";
 }
+
+/** A site's entry once it has asked: it shows in the profile's Site settings. */
+export function siteOnAsking(known: SiteChoice | undefined, nowMs: number): SiteChoice {
+  return { camera: known?.camera ?? "ask", microphone: known?.microphone ?? "ask", location: known?.location ?? "ask", askedMs: nowMs };
+}
+
+/** A site's entry with some of its choices changed. */
+export function siteWithChoice(known: SiteChoice | undefined, change: Partial<Record<SiteDevice, SitePermission | null>>, nowMs: number): SiteChoice {
+  return {
+    camera: change.camera ?? known?.camera ?? "ask",
+    microphone: change.microphone ?? known?.microphone ?? "ask",
+    location: change.location ?? known?.location ?? "ask",
+    askedMs: known?.askedMs ?? nowMs,
+  };
+}
+
+/** A site as Settings lists it; one saved before sites could ask for location has no choice for it. */
+export const listedSite = (origin: string, choice: SiteChoice) => ({ origin, ...choice, location: choice.location ?? "ask" });
