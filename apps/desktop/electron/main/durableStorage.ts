@@ -40,7 +40,7 @@ export function keepStorageOf(contents: WebContents): void {
 }
 
 /** Replaces `file` whole or not at all: a crash mid-write must leave the old contents, not half of the new. */
-export function replaceFile(file: string, contents: string): void {
+export function replaceFile(file: string, contents: string | Buffer): void {
   const temporary = `${file}.tmp`;
   const handle = fs.openSync(temporary, "w");
   try {

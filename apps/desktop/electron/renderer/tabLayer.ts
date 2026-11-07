@@ -15,6 +15,7 @@ import { devToolsChanged, userUsed } from "@/state/agentPause";
 
 import { dropOverlay, installAgentOverlays, placeOverlay } from "./agentOverlay";
 import { watchUserComposition } from "./agentFocusGuard";
+import { installGuestLogins } from "./guestLogins";
 import { readFavicon } from "./pageFavicon";
 
 declare global {
@@ -33,6 +34,9 @@ declare global {
       onGuestPermissionRefused(listener: (details: { from: number; origin: string; refused: string[] }) => void): void;
       onGuestEscape(listener: (details: { from: number }) => void): void;
       onGuestKey(listener: () => void): void;
+      vault(op: string, args?: unknown): Promise<unknown>;
+      bookmarks(op: string, args?: unknown): Promise<unknown>;
+      onGuestLogin(listener: (details: { from: number; kind: string; id?: string; profile?: string; site?: string; username?: string; update?: boolean }) => void): void;
       devControl(op: string, args?: unknown): Promise<unknown>;
       agent(call: Record<string, unknown>): Promise<unknown>;
       onAgentEvent(listener: (details: { from: number; event: "devtools-opened" | "devtools-closed" | "detached" }) => void): void;
@@ -117,6 +121,11 @@ function takeKeyboard(): void {
   }
 }
 
+function focusTakingKeyboard(this: HTMLElement, options?: FocusOptions): void {
+  if (this.tagName !== "WEBVIEW" && keyboardInPage()) takeKeyboard();
+  nativeFocus.call(this, options);
+}
+
 function installKeyboardHandover(): void {
   keyboardAnchor = document.createElement("div");
   keyboardAnchor.tabIndex = -1;
@@ -128,10 +137,7 @@ function installKeyboardHandover(): void {
   keyboardAnchor.append(keyboardFrame);
   document.body.append(keyboardAnchor);
   // Every field of the app, by whatever path it takes focus: autoFocus, a menu key, a shortcut.
-  HTMLElement.prototype.focus = function focus(this: HTMLElement, options?: FocusOptions) {
-    if (this.tagName !== "WEBVIEW" && keyboardInPage()) takeKeyboard();
-    nativeFocus.call(this, options);
-  };
+  HTMLElement.prototype.focus = focusTakingKeyboard;
   window.brigadierShell.onGuestKey(() => { pageHadKey = true; });
 }
 
@@ -156,6 +162,7 @@ export function installTabLayer(): void {
   installKeyboardHandover();
   installAgentOverlays();
   watchUserComposition();
+  installGuestLogins((from) => [...pages.values()].find((page) => page.ready && page.element.getWebContentsId() === from)?.id ?? null);
 
   // A drag anywhere in the app must not fall into a page it crosses: the divider's or a text
   // selection's pointer stays with the app until it's let go.
@@ -258,16 +265,16 @@ function listen(page: Page): void {
     canGoBack: page.ready && element.canGoBack(),
     canGoForward: page.ready && element.canGoForward(),
   });
-  const load = () => { emit({ type: "load", url: page.url, loading: page.loading }); history(); };
+  const loadChanged = () => { emit({ type: "load", url: page.url, loading: page.loading }); history(); };
   // A load drops a find in flight, with no answer from the old document: the bar looks again when it stops.
-  on("did-start-loading", () => { answerFind(page, NOT_FOUND); page.loading = true; load(); });
-  on("did-stop-loading", () => { page.loading = false; load(); });
-  on<{ url: string }>("did-navigate", ({ url }) => { page.url = url; load(); });
+  on("did-start-loading", () => { answerFind(page, NOT_FOUND); page.loading = true; loadChanged(); });
+  on("did-stop-loading", () => { page.loading = false; loadChanged(); });
+  on<{ url: string }>("did-navigate", ({ url }) => { page.url = url; loadChanged(); });
   on<{ url: string; isMainFrame: boolean }>("did-navigate-in-page", ({ url, isMainFrame }) => {
     // A frame's own navigation adds to the tab's history too.
     if (!isMainFrame) { history(); return; }
     page.url = url;
-    load();
+    loadChanged();
   });
   on<{ title: string }>("page-title-updated", ({ title }) => emit({ type: "title", title }));
   const favicon = () => {

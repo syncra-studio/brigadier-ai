@@ -57,6 +57,7 @@ function Form({ profile, onClose, onDeleted }: { profile: BrowserProfile; onClos
           ? `Nothing is open on ${profile.name}.`
           : `${counted(sessions, "session", "sessions")} and ${counted(tabs, "open tab", "open tabs")} move to ${target}. Those pages reload, signed in as ${target}.`}
       </p>
+      <p className="text-foreground/65 text-xs">Its saved passwords are deleted with it. They don't move to {target}.</p>
       <div className="grid gap-1.5">
         <label htmlFor={field} className="text-label">Type <span className="font-medium">{profile.name}</span> to confirm</label>
         <Input id={field} value={typed} autoFocus onChange={(event) => setTyped(event.target.value)} />

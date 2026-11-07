@@ -8,7 +8,6 @@ import { installFailedLoad } from "./guestFailedLoad";
 import { installGuestLinks, takeOsLink } from "./guestLinks";
 import { installGuestMenu } from "./guestMenu";
 import { unfocused } from "./identity";
-import { WINDOW_BACKGROUND } from "./windows";
 
 /** Which tab's guest a popup came from, however many popups deep: a tab it opens goes beside that one. */
 const tabGuest = new WeakMap<WebContents, WebContents>();
@@ -33,7 +32,7 @@ export function openAsTab(from: WebContents, url: string): void {
 
 /** Everything a page gets, in a tab's guest or in a popup. */
 export function installGuest(contents: WebContents): void {
-  installGuestMenu(contents);
+  installGuestMenu(contents, openAsTab);
   installFailedLoad(contents);
   installGuestLinks(contents);
   contents.setWindowOpenHandler((details) => {
@@ -50,7 +49,8 @@ export function installGuest(contents: WebContents): void {
         ...(parent ? { parent } : {}),
         show: !unfocused,
         focusable: !unfocused,
-        backgroundColor: WINDOW_BACKGROUND,
+        // A page with no background of its own shows this, as a web browser's white.
+        backgroundColor: "#ffffff",
         fullscreenable: false,
         // The opener's session comes by itself, so the popup is signed in as its tab is.
         webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: false, webviewTag: false, webSecurity: true, allowRunningInsecureContent: false },
