@@ -18,6 +18,7 @@ module.exports = {
   extraMetadata: {
     name: "brigadier",
     description: "Brigadier",
+    homepage: "https://github.com/syncra-studio/brigadier-ai",
     main: "dist-electron/main.mjs",
     type: "module",
     ...(process.env.BRIGADIER_VERSION ? { version: process.env.BRIGADIER_VERSION } : {}),
