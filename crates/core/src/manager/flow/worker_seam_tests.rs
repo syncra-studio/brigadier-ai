@@ -12,6 +12,7 @@ use brigadier_providers::{ErrorKind, ProviderError, ProviderEvent};
 
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
 use crate::manager::conversation::long::read_long;
+use crate::manager::long_sessions::HANDOFF_AFTER;
 use crate::manager::seam::{CARRY_ON, CONTEXT_POINTER, Phase, SeamFile, read_seam};
 use crate::thread_view::{HANDOFF_MARK, NUDGE_MARK};
 use crate::work::Task;
@@ -29,6 +30,8 @@ struct Seen {
     limit_note: std::sync::atomic::AtomicBool,
     /// Its next note turn stops as Claude's thrash guard does.
     thrash_note: std::sync::atomic::AtomicBool,
+    /// How many times each of its CLI sessions compacted on "Grow.".
+    grown: Mutex<std::collections::HashMap<String, u32>>,
 }
 
 impl Seen {
@@ -176,6 +179,18 @@ fn script(seen: Arc<Seen>) -> Script {
             }
             if said.contains("Grow.") {
                 compact(&turn, false).await;
+                let grown = {
+                    let mut grown = seen.grown.lock().unwrap();
+                    let count = grown.entry(turn.native_id.clone()).or_default();
+                    *count += 1;
+                    *count
+                };
+                // Its note request is steered into this turn, as a real CLI takes one in. Ending
+                // first would let the fake start it beside this turn's end, which then finds no
+                // note and asks again.
+                if grown == HANDOFF_AFTER {
+                    turn.until_steered().await;
+                }
                 return Reply::text("Grown.");
             }
             if said.contains("Fail.") {
@@ -204,15 +219,8 @@ fn script(seen: Arc<Seen>) -> Script {
                     native_id: None,
                 })
                 .await;
-                // Its note request is steered into this turn, which reads it before it ends, as
-                // both CLIs do: Claude holds a late one's turn open, Codex refuses it.
-                if let Some(nudge) = turn.steered().await {
-                    std::fs::write(note_of(&nudge), "Doing now: swelling.\nNext: go on.").unwrap();
-                    seen.worker
-                        .lock()
-                        .unwrap()
-                        .push((turn.native_id.clone(), nudge));
-                }
+                // As "Grow." does at its third: the note request is taken into this turn.
+                turn.until_steered().await;
                 return Reply::text("Swollen.");
             }
             if said.contains("Overflow.") {

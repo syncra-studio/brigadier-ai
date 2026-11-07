@@ -239,7 +239,22 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
                 .any(|task| task.state == crate::work::TaskState::Reported)
         })
         .await;
-        // The report's turn too, so `read other` below sees the session's last answer.
+        // The report's turn too, so `read other` below sees the session's last answer. Reported
+        // comes before the wake that starts it, so idle alone can return in that gap.
+        let core = flow.core.clone();
+        super::eventually_async("the report's turn answered", || {
+            let (core, session) = (core.clone(), session.clone());
+            async move {
+                core.list_messages(session, None, 50)
+                    .await
+                    .unwrap()
+                    .messages
+                    .into_iter()
+                    .rfind(|message| message.role == crate::model::MessageRole::Assistant)
+                    .is_some_and(|message| message.text == "Noted.")
+            }
+        })
+        .await;
         flow.idle_in(session).await;
     }
     answers

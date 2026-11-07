@@ -338,11 +338,24 @@ async fn cancellation_storage_failure_is_reported_and_cannot_rearm_a_worker() {
         .worker(&task)
         .join("record/quota-transition.json");
     std::fs::create_dir(&path).unwrap();
-    let error = flow.manager.pause_task(task.id.clone()).await.unwrap_err();
+    // The wait shows before its recovery lets go of the worker: a pause refused with "try again"
+    // moved nothing, so it goes again.
+    let error = tokio::time::timeout(crate::test_patience(), async {
+        loop {
+            let error = flow.manager.pause_task(task.id.clone()).await.unwrap_err();
+            if !error.to_string().contains("try again") {
+                return error;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("a pause that gets past its refusals");
     assert!(
         error
             .to_string()
-            .contains("could not cancel worker transition")
+            .contains("could not cancel worker transition"),
+        "{error}"
     );
     assert!(
         worker(&flow).await.quota_wait.is_none(),
