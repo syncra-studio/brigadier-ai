@@ -18,7 +18,8 @@
         "screenshot",
         "close",
         "show",
-        "events"
+        "events",
+        "eval"
       ]
     },
     "text": {

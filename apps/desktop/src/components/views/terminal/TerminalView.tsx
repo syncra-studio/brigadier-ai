@@ -8,6 +8,7 @@ import { type ITheme, Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 
 import { request } from "@/ipc/client";
+import { noteTerminalOutput, openFromTerminal } from "@/state/devServers";
 import { openLink } from "@/state/links";
 import type { TerminalInfo, TerminalOutput } from "@/ipc/generated";
 import { tokenColor } from "@/lib/tokens";
@@ -163,6 +164,11 @@ export function TerminalView({
       if (path) onCwd(path);
       return false;
     }) : null;
+    let openToken: string | null = null;
+    const opening = terminal.parser.registerOscHandler(7733, (value) => {
+      openFromTerminal(value, openToken);
+      return true;
+    });
     const unread = reader?.(() => serialize.serialize({ scrollback: 5000 }));
 
     let id: string | null = null;
@@ -172,6 +178,7 @@ export function TerminalView({
     const show = (output: TerminalOutput) => {
       if (output.type === "data") {
         terminal.write(output.data);
+        noteTerminalOutput(output.data);
         return;
       }
       ended = true;
@@ -193,6 +200,7 @@ export function TerminalView({
       .then((opened) => {
         if (!live) return;
         id = opened.id;
+        openToken = opened.openToken ?? null;
         setError(null);
         terminal.write(opened.scrollback);
         for (const output of early.splice(0))
@@ -314,6 +322,7 @@ export function TerminalView({
       stop();
       title?.dispose();
       cwd?.dispose();
+      opening.dispose();
       unread?.();
       liveTerminal.current = null;
       terminal.dispose();

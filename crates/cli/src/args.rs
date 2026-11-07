@@ -725,6 +725,12 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
                     put("submit", Some(json!(args.switch("submit"))));
                     put("asks", asks);
                 }
+                "eval" => {
+                    if words.is_empty() {
+                        return Err(error("missing <script>"));
+                    }
+                    put("script", Some(json!(words.join(" "))));
+                }
                 "events" => {
                     one("nothing", false)?.map_or(Ok(()), |extra| {
                         Err(error(&format!("unexpected argument {extra}")))

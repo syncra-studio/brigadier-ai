@@ -9,6 +9,11 @@ export type TerminalInfo = { id: string,
  */
 shell: string, cwd: string, 
 /**
+ * What its programs' `BROWSER` proves itself with to open a page in the app (see
+ * `Terminals::browser_env`).
+ */
+openToken: string, 
+/**
  * Its latest output, for a tab opened again while it runs.
  */
 scrollback: string, };

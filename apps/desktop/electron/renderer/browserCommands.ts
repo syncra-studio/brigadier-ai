@@ -2,7 +2,8 @@
 import type { BrowserBounds, BrowserEvent } from "@/ipc/generated";
 
 import { agentCapture, agentDrive, agentEvents, agentLoad, agentRun, agentSignInStop } from "./browserAgentHands";
-import { closePage, find, focusPage, go, navigatePage, openPage, placePage, printPage, setModal, zoom } from "./tabLayer";
+import { closeDevtools, openDevtools, placeDevtools } from "./browserDevtoolsLayer";
+import { agentPage, closePage, find, focusPage, go, navigatePage, openPage, placePage, printPage, setModal, zoom } from "./tabLayer";
 
 type Args = Record<string, unknown>;
 type Channelish = { onmessage: (message: BrowserEvent) => void };
@@ -58,7 +59,11 @@ export const browserCommands: Record<string, (args: Args) => unknown> = {
   browser_agent_drive: (args) => agentDrive(args.id as string, args.on as boolean, args.resumed === true),
   browser_agent_sign_in_stop: (args) => agentSignInStop(args.id as string),
   browser_agent_events: (args) => agentEvents(args.id as string, args.since as number, args.kinds as string[]),
-  browser_import_sources: () => [],
-  browser_import: () => null,
-  browser_import_open_access: () => null,
+  browser_devtools_open: (args) => openDevtools(args.id as string, args.bounds as BrowserBounds),
+  browser_devtools_place: (args) => placeDevtools(args.id as string, args.bounds as BrowserBounds | null),
+  browser_devtools_close: (args) => closeDevtools(args.id as string),
+  browser_device_set: (args) => window.brigadierShell.devtools("device", { guest: agentPage(args.id as string).guest, device: args.device }),
+  browser_device_clear: (args) => window.brigadierShell.devtools("deviceClear", { guest: agentPage(args.id as string).guest }),
+  browser_pick: (args) => window.brigadierShell.devtools("pick", { guest: agentPage(args.id as string).guest }),
+  browser_pick_stop: (args) => window.brigadierShell.devtools("pickStop", { guest: agentPage(args.id as string).guest }),
 };

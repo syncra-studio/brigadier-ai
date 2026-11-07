@@ -41,6 +41,7 @@ declare global {
       onGuestLogin(listener: (details: { from: number; kind: string; id?: string; profile?: string; site?: string; username?: string; update?: boolean }) => void): void;
       devControl(op: string, args?: unknown): Promise<unknown>;
       agent(call: Record<string, unknown>): Promise<unknown>;
+      devtools(op: string, args: Record<string, unknown>): Promise<unknown>;
       onAgentEvent(listener: (details: { from: number; event: "devtools-opened" | "devtools-closed" | "detached" }) => void): void;
     };
   }
