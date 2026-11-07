@@ -274,9 +274,10 @@ export async function browserOpen(
   bounds: BrowserBounds,
   agent: boolean,
   onEvent: (event: BrowserEvent) => void,
+  restored = false,
 ): Promise<void> {
   try {
-    await invoke("browser_open", { id, url, bounds, agent, events: newChannel<BrowserEvent>(onEvent) });
+    await invoke("browser_open", { id, url, bounds, agent, restored, events: newChannel<BrowserEvent>(onEvent) });
   } catch (error) {
     throw isIpcError(error) ? new RequestError(error) : error;
   }

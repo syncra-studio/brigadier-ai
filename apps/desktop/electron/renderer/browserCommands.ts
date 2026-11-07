@@ -10,7 +10,7 @@ type Channelish = { onmessage: (message: BrowserEvent) => void };
 export const browserCommands: Record<string, (args: Args) => unknown> = {
   browser_open: (args) => {
     const events = args.events as Channelish;
-    return openPage(args.id as string, args.url as string, args.bounds as BrowserBounds, (event) => events.onmessage(event), args.agent === true);
+    return openPage(args.id as string, args.url as string, args.bounds as BrowserBounds, (event) => events.onmessage(event), args.agent === true, args.restored === true);
   },
   browser_navigate: (args) => navigatePage(args.id as string, args.url as string, args.bounds as BrowserBounds),
   browser_place: (args) => placePage(args.id as string, args.bounds as BrowserBounds | null),

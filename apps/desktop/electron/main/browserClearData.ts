@@ -5,7 +5,7 @@
 import { session, webContents, type Session, type WebContents } from "electron";
 
 import { handleFromApp } from "./appPage";
-import { clearVisits, history, markAgentGuest, profileStore, removeVisits, type HistoryFilter } from "./browserHistory";
+import { clearVisits, describeGuest, history, profileStore, removeVisits, type HistoryFilter } from "./browserHistory";
 import { cancelDownload, configureDownloads, downloads, finishedPath, removeDownloads, watchDownloads } from "./browserDownloads";
 import { openChecked } from "./dialogs";
 import { note } from "./events";
@@ -129,7 +129,7 @@ async function siteCount(profileId: string): Promise<number> {
   return new Set(cookies.map((cookie) => (cookie.domain ?? "").replace(/^\./, ""))).size;
 }
 
-type Args = { profile: string; query: string; filter: HistoryFilter; beforeMs: number | null; beforeId: number | null; limit: number; ids: number[] | null; id: number; clear: ClearRequest; webContents: number; downloadsDir?: string; askDownloads?: boolean };
+type Args = { profile: string; query: string; filter: HistoryFilter; beforeMs: number | null; beforeId: number | null; limit: number; ids: number[] | null; id: number; clear: ClearRequest; webContents: number; agent: boolean; restored: boolean; downloadsDir?: string; askDownloads?: boolean };
 
 const OPS: Record<string, (args: Args) => unknown> = {
   history: ({ profile, query, filter, beforeMs, beforeId, limit }) => history(profile, query, filter, beforeMs, beforeId, limit),
@@ -141,7 +141,7 @@ const OPS: Record<string, (args: Args) => unknown> = {
   clear: ({ profile, clear }) => clearBrowsingData(profile, clear),
   siteCount: ({ profile }) => siteCount(profile),
   configure: (args) => configureDownloads(args),
-  agentGuest: ({ webContents: id }) => markAgentGuest(id),
+  guest: ({ webContents: id, agent, restored }) => describeGuest(id, { agent, restored }),
 };
 
 export function installBrowserData(): void {

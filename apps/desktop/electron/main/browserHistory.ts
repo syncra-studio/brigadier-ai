@@ -102,7 +102,7 @@ export function importHistory(profileId: string, items: readonly ImportedVisit[]
 }
 
 /** What a guest last put in the history. `clearedUrl`: its page when that row was removed; a reload of it mustn't bring the row back. */
-type Watched = { profileId: string; agent: boolean; id: number | null; url: string; clearedUrl: string | null };
+type Watched = { profileId: string; agent: boolean; restored: boolean; id: number | null; url: string; clearedUrl: string | null };
 const watched = new Map<number, Watched>();
 
 function forgetGoneVisits(profileId: string): void {
@@ -114,7 +114,22 @@ function forgetGoneVisits(profileId: string): void {
   }
 }
 
+/** The guest shows `url` without it being a visit: it carries on the newest row of that address, or none if it was cleared. */
+function carryOn(guest: Watched, url: string): void {
+  const row = profileStore(guest.profileId).prepare("SELECT id FROM visits WHERE url = ? ORDER BY at_ms DESC LIMIT 1").get(url) as { id: number } | undefined;
+  guest.id = row?.id ?? null;
+  guest.url = url;
+  guest.clearedUrl = row ? null : url;
+}
+
 function visited(guest: Watched, url: string): void {
+  if (guest.restored) {
+    guest.restored = false;
+    if (webPage(url)) {
+      carryOn(guest, url);
+      return;
+    }
+  }
   if (!webPage(url)) {
     guest.id = null;
     guest.url = url;
@@ -138,7 +153,7 @@ function visited(guest: Watched, url: string): void {
 export function watchVisits(contents: WebContents): void {
   const profileId = profileOfStorage(contents.session.storagePath ?? null);
   if (!profileId) return;
-  const guest: Watched = { profileId, agent: false, id: null, url: "", clearedUrl: null };
+  const guest: Watched = { profileId, agent: false, restored: false, id: null, url: "", clearedUrl: null };
   watched.set(contents.id, guest);
   contents.once("destroyed", () => watched.delete(contents.id));
   contents.on("did-navigate", (_event, url) => visited(guest, url));
@@ -150,12 +165,25 @@ export function watchVisits(contents: WebContents): void {
   });
 }
 
-/** An agent gave this tab its page: its pages count as the agent's, the first one already recorded included. */
-export function markAgentGuest(webContentsId: number): void {
+/**
+ * What the tab layer knows of its guest. `agent`: an agent gave the tab its page, so its pages count as the agent's.
+ * `restored`: the tab came back at a page it already had, after a restart, which is no new visit. This can arrive
+ * after the first load has been recorded, so it also undoes that.
+ */
+export function describeGuest(webContentsId: number, { agent, restored }: { agent: boolean; restored: boolean }): void {
   const guest = watched.get(webContentsId);
+  note("guest-described", { webContents: webContentsId, known: Boolean(guest), agent, restored, recorded: guest?.id ?? null });
   if (!guest) return;
-  guest.agent = true;
-  if (guest.id !== null) profileStore(guest.profileId).prepare("UPDATE visits SET agent = 1 WHERE id = ?").run(guest.id);
+  const db = profileStore(guest.profileId);
+  guest.agent = agent;
+  if (agent && guest.id !== null) db.prepare("UPDATE visits SET agent = 1 WHERE id = ?").run(guest.id);
+  if (!restored) return;
+  if (guest.id === null) {
+    guest.restored = true;
+    return;
+  }
+  db.prepare("DELETE FROM visits WHERE id = ?").run(guest.id);
+  carryOn(guest, guest.url);
 }
 
 /** The profile's data is going: its store goes now, with what's in it. */
