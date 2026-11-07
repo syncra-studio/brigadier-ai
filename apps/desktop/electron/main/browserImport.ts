@@ -276,6 +276,8 @@ export function installBrowserImport(): void {
     browser_import_origins: () => importOrigins(readSaved().sources ?? {}),
     browser_import_read: (args) => readProfile(args),
     browser_import_write: (args, { sender }) => writeProfile(args, sender),
+    // Tauri's one-step import: the page reads and writes through the two commands above instead.
+    browser_import: () => null,
     browser_import_open_access: () => {
       if (process.platform === "darwin") void shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles");
     },

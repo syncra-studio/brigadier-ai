@@ -16,12 +16,12 @@ export const useBrowserSettingsView = create<{
   clearing: Selection | null;
 }>(() => ({ clearing: null }));
 
-/** Shows `view` (or the page itself) under what Settings shows now. */
-export function showBrowserSettingsView(view: BrowserSettingsView | "page"): void {
+/** Shows `view` (or the page itself) under what Settings shows now, for `profile` when given. */
+export function showBrowserSettingsView(view: BrowserSettingsView | "page", profile?: string): void {
   const under = useApp.getState().selection;
   if (view === "clear") useBrowserSettingsView.setState({ clearing: under });
   else if (view === "page") openSettings("browser");
-  else select({ type: "settings", page: "browser", detail: { view } });
+  else select({ type: "settings", page: "browser", detail: { view, ...(profile ? { profile } : {}) } });
 }
 
 /** Opens or closes the Clear browsing data dialog. */
@@ -30,8 +30,8 @@ export function setClearingBrowsingData(open: boolean): void {
   else useBrowserSettingsView.setState({ clearing: null });
 }
 
-/** Shows Settings › Browser, at `view` when given. */
-export function openBrowserSettings(view?: BrowserSettingsView): void {
+/** Shows Settings › Browser, at `view` when given, for `profile` when given. */
+export function openBrowserSettings(view?: BrowserSettingsView, profile?: string): void {
   if (!view || view === "clear") openSettings("browser");
-  if (view) showBrowserSettingsView(view);
+  if (view) showBrowserSettingsView(view, profile);
 }

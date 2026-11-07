@@ -216,7 +216,7 @@ export function DownloadsButton() {
           type="button"
           onClick={() => {
             setOpen(false);
-            openBrowserSettings("downloads");
+            openBrowserSettings("downloads", profile);
           }}
           className="hover:bg-foreground/8 text-browser h-browser-menu-item flex w-full items-center rounded-capsule px-2"
         >

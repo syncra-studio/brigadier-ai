@@ -63,9 +63,13 @@ test("browser settings: rows, clear, history, downloads, sites, off", { timeout:
   assert.deepEqual(seen.filters, ["All", "Agent", "Other"]);
   assert.deepEqual(seen.agentVisits, ["http://localhost:5173/checkout"]);
   assert.equal(seen.repicked, "Browser");
+  // Running: its progress, a bar and Cancel; cancelled and failed say so; done says nothing.
   assert.deepEqual(seen.downloads, {
     title: "Download history",
-    files: ["/Users/me/Downloads/report.pdf", "/Users/me/Downloads/big.zip"],
+    files: ["/Users/me/Downloads/video.mp4", "/Users/me/Downloads/disk.iso", "/Users/me/Downloads/report.pdf", "/Users/me/Downloads/big.zip"],
+    lines: ["Downloading · 25% · 5.2 MB of 21.0 MB · example.com", "Cancelled · example.com", "example.com", "Failed · example.com"],
+    bars: [[5 * 1024 * 1024, 20 * 1024 * 1024]],
+    cancels: 1,
   });
   assert.deepEqual(seen.sites, { title: "Site settings", group: true, choices: ["Ask", "Block", "Ask"] });
 
@@ -93,9 +97,11 @@ test("browser settings: rows, clear, history, downloads, sites, off", { timeout:
   // What reached the shell and the daemon, in order.
   assert.deepEqual(seen.asked, [
     settings(true),
-    { clear: { sinceMs: null, history: true, cookies: true, cache: false, downloads: true, sites: false } },
+    // Opened from the page itself, for the default profile.
+    { clear: { sinceMs: null, history: true, cookies: true, cache: false, downloads: true, sites: false }, profile: "default" },
     { history: "all" },
     { history: "agent" },
+    { cancel: 4, profile: "default" },
     settings(false),
   ]);
 });
