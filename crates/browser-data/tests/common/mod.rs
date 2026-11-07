@@ -34,6 +34,41 @@ pub fn chromium_encrypt(password: &[u8], value: &str, hash_host: Option<&str>) -
     [b"v10".as_slice(), &ciphertext].concat()
 }
 
+/// Encrypts a cookie value the way Chromium on Linux does: `prefix` (`v10` or `v11`), a key from
+/// `password` with one PBKDF2 round.
+pub fn chromium_encrypt_linux(
+    prefix: &str,
+    password: &[u8],
+    value: &str,
+    hash_host: Option<&str>,
+) -> Vec<u8> {
+    let key = pbkdf2::pbkdf2_hmac_array::<sha1::Sha1, 16>(password, b"saltysalt", 1);
+    let mut plaintext = Vec::new();
+    if let Some(host) = hash_host {
+        plaintext.extend_from_slice(&Sha256::digest(host.as_bytes()));
+    }
+    plaintext.extend_from_slice(value.as_bytes());
+    let ciphertext = cbc::Encryptor::<aes::Aes128>::new(&key.into(), &[b' '; 16].into())
+        .encrypt_padded_vec::<Pkcs7>(&plaintext);
+    [prefix.as_bytes(), &ciphertext].concat()
+}
+
+/// Encrypts a cookie value the way Chromium on Windows does: `v10`, a nonce, AES-256-GCM.
+pub fn chromium_encrypt_windows(key: &[u8; 32], value: &str, hash_host: Option<&str>) -> Vec<u8> {
+    use aes_gcm::aead::Aead;
+    use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+    let mut plaintext = Vec::new();
+    if let Some(host) = hash_host {
+        plaintext.extend_from_slice(&Sha256::digest(host.as_bytes()));
+    }
+    plaintext.extend_from_slice(value.as_bytes());
+    let nonce = [7u8; 12];
+    let sealed = Aes256Gcm::new(key.into())
+        .encrypt(Nonce::from_slice(&nonce), plaintext.as_slice())
+        .unwrap();
+    [b"v10".as_slice(), &nonce, &sealed].concat()
+}
+
 pub fn mkdirs(path: &Path) {
     std::fs::create_dir_all(path).unwrap();
 }
@@ -176,6 +211,23 @@ pub fn firefox_places_db(path: &Path) -> Connection {
     conn
 }
 
+/// Adds Firefox's bookmark table and its fixed folders to a places database.
+pub fn firefox_bookmark_roots(conn: &Connection) {
+    conn.execute_batch(
+        "CREATE TABLE moz_bookmarks (id INTEGER PRIMARY KEY, type INTEGER, fk INTEGER,
+           parent INTEGER, position INTEGER, title LONGVARCHAR, dateAdded INTEGER,
+           lastModified INTEGER, guid TEXT);
+         INSERT INTO moz_bookmarks (id, type, parent, position, title, guid) VALUES
+           (1, 2, 0, 0, '', 'root________'),
+           (2, 2, 1, 0, 'menu', 'menu________'),
+           (3, 2, 1, 1, 'toolbar', 'toolbar_____'),
+           (4, 2, 1, 2, 'tags', 'tags________'),
+           (5, 2, 1, 3, 'unfiled', 'unfiled_____'),
+           (6, 2, 1, 4, 'mobile', 'mobile______');",
+    )
+    .unwrap();
+}
+
 pub fn safari_history_db(path: &Path) -> Connection {
     mkdirs(path.parent().unwrap());
     let conn = Connection::open(path).unwrap();
@@ -278,8 +330,11 @@ pub fn profile(id: &str, family: Family, dir: PathBuf) -> Profile {
         app_path: None,
         keychain_service: None,
         keychain_account: None,
+        local_state: None,
+        linux_secret_application: None,
         has_cookies: true,
         has_history: true,
+        has_bookmarks: true,
         readable: true,
         is_default: true,
     }

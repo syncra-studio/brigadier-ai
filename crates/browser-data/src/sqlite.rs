@@ -88,12 +88,16 @@ pub(crate) fn io_error(path: &Path, err: std::io::Error) -> Error {
     match err.kind() {
         std::io::ErrorKind::NotFound => Error::NotFound(path.to_owned()),
         std::io::ErrorKind::PermissionDenied => Error::PermissionDenied(path.to_owned()),
+        // ERROR_SHARING_VIOLATION and ERROR_LOCK_VIOLATION: a running browser holds it shut.
+        _ if cfg!(windows) && matches!(err.raw_os_error(), Some(32 | 33)) => {
+            Error::Locked(path.to_owned())
+        }
         _ => Error::Io(err),
     }
 }
 
 /// Maps a SQLite error on `path` to the crate's error.
-fn sqlite_error(path: &Path, err: rusqlite::Error) -> Error {
+pub(crate) fn sqlite_error(path: &Path, err: rusqlite::Error) -> Error {
     match err.sqlite_error_code() {
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => Error::Locked(path.to_owned()),
         Some(ErrorCode::PermissionDenied) => Error::PermissionDenied(path.to_owned()),
@@ -172,6 +176,22 @@ mod tests {
             .query_row("SELECT x FROM t", [], |row| row.get(0))
             .unwrap();
         assert_eq!(x, 7);
+    }
+
+    /// Runs only on Windows: what a running Chromium does to its cookie store.
+    #[cfg(windows)]
+    #[test]
+    fn a_file_held_shut_reads_as_locked() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Cookies");
+        std::fs::write(&path, b"x").unwrap();
+        let _held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        assert!(matches!(open_copy(&path), Err(Error::Locked(_))));
     }
 
     #[test]

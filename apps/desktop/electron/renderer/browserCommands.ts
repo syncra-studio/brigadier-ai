@@ -11,7 +11,7 @@ type Channelish = { onmessage: (message: BrowserEvent) => void };
 export const browserCommands: Record<string, (args: Args) => unknown> = {
   browser_open: (args) => {
     const events = args.events as Channelish;
-    return openPage(args.id as string, args.url as string, args.bounds as BrowserBounds, (event) => events.onmessage(event));
+    return openPage(args.id as string, args.url as string, args.bounds as BrowserBounds, (event) => events.onmessage(event), args.agent === true, args.restored === true);
   },
   browser_navigate: (args) => navigatePage(args.id as string, args.url as string, args.bounds as BrowserBounds),
   browser_place: (args) => placePage(args.id as string, args.bounds as BrowserBounds | null),
@@ -21,7 +21,7 @@ export const browserCommands: Record<string, (args: Args) => unknown> = {
   browser_find: (args) => find(args.id as string, args.query as string, args.step as "type" | "next" | "previous"),
   browser_print: (args) => printPage(args.id as string),
   browser_close: (args) => closePage(args.id as string),
-  browser_configure: () => null,
+  browser_configure: (args) => window.brigadierShell.browserData("configure", (args as { options: unknown }).options),
   browser_focus: (args) => focusPage(args.id as string | null),
   browser_permission: (args) => window.brigadierShell.permissionAnswer(args.request as number, args.answer as string),
   browser_permission_settings: (args) => window.brigadierShell.permissionOpenSettings(args.device as string),
@@ -42,13 +42,14 @@ export const browserCommands: Record<string, (args: Args) => unknown> = {
   browser_bookmark_add: (args) => window.brigadierShell.bookmarks("add", args),
   browser_bookmark_update: (args) => window.brigadierShell.bookmarks("update", args),
   browser_bookmark_remove: (args) => window.brigadierShell.bookmarks("remove", args),
-  browser_history: () => [],
-  browser_history_remove: () => null,
-  browser_downloads: () => [],
-  browser_download_open: () => null,
-  browser_downloads_remove: () => null,
-  browser_clear: () => null,
-  browser_site_count: () => null,
+  browser_history: (args) => window.brigadierShell.browserData("history", args),
+  browser_history_remove: (args) => window.brigadierShell.browserData("historyRemove", args),
+  browser_downloads: (args) => window.brigadierShell.browserData("downloads", args),
+  browser_download_open: (args) => window.brigadierShell.browserData("downloadOpen", args),
+  browser_download_cancel: (args) => window.brigadierShell.browserData("downloadCancel", args),
+  browser_downloads_remove: (args) => window.brigadierShell.browserData("downloadsRemove", args),
+  browser_clear: (args) => window.brigadierShell.browserData("clear", args),
+  browser_site_count: (args) => window.brigadierShell.browserData("siteCount", args),
   browser_sites: (args) => window.brigadierShell.profiles("sites", args),
   browser_site_set: (args) => window.brigadierShell.profiles("setSite", args),
   browser_read: () => null,
@@ -66,7 +67,4 @@ export const browserCommands: Record<string, (args: Args) => unknown> = {
   browser_device_clear: (args) => window.brigadierShell.devtools("deviceClear", { guest: agentPage(args.id as string).guest }),
   browser_pick: (args) => window.brigadierShell.devtools("pick", { guest: agentPage(args.id as string).guest }),
   browser_pick_stop: (args) => window.brigadierShell.devtools("pickStop", { guest: agentPage(args.id as string).guest }),
-  browser_import_sources: () => [],
-  browser_import: () => null,
-  browser_import_open_access: () => null,
 };
