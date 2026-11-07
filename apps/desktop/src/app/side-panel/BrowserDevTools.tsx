@@ -1,6 +1,5 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { showPage } from "@/app/conversation/browserLayer";
 import { followLayout } from "@/app/conversation/pageWatch";
 import { typeInto } from "@/app/conversation/composerDraft";
 import { Button, TooltipIconButton } from "@/components/controls";
@@ -25,7 +24,7 @@ import {
   useBrowserDev,
 } from "@/state/browserDev";
 import { useBrowsers } from "@/state/browsers";
-import { sessionWith } from "@/state/sessionTabs";
+import { CHAT_TAB, selectTab, sessionWith } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 
 import { toggleDevice, useDeviceSize } from "./BrowserDeviceSizes";
@@ -90,8 +89,10 @@ export function BrowserPickerBar({ id }: { id: string }) {
   const toChat = () => {
     const session = sessionWith(id);
     const text = elementText(picked);
-    if (session && typeInto(session, (draft) => (draft ? `${draft}\n\n${text}\n` : `${text}\n`))) changeDev(id, { picked: null });
-    else toast("There is no chat open to add it to.", { tone: "error" });
+    if (session && typeInto(session, (draft) => (draft ? `${draft}\n\n${text}\n` : `${text}\n`))) {
+      changeDev(id, { picked: null });
+      toast("Added to chat", { actions: [{ label: "View", run: () => selectTab(session, CHAT_TAB) }] });
+    } else toast("There is no chat open to add it to.", { tone: "error" });
   };
   const size = `${Math.round(picked.rect.width)}×${Math.round(picked.rect.height)}`;
   return (
@@ -105,12 +106,30 @@ export function BrowserPickerBar({ id }: { id: string }) {
   );
 }
 
-/** Above the floating composer, where it would lie over this element. */
+/** Above the floating composer or the chat button, where either would lie over this element. */
 function usableBounds(element: HTMLElement): BrowserBounds {
   const box = element.getBoundingClientRect();
-  const composer = element.closest('[data-slot="pane-workspace"]')?.querySelector('[data-slot="floating-composer"]')?.getBoundingClientRect();
-  const height = composer && composer.height > 0 ? Math.min(box.height, Math.max(0, composer.top - box.top - 12)) : box.height;
-  return { x: box.left, y: box.top, width: box.width, height };
+  let bottom = box.bottom;
+  const over = [
+    element.closest('[data-slot="pane-workspace"]')?.querySelector('[data-slot="floating-composer"]'),
+    document.querySelector('[data-above-page] [data-slot="tab-chat-button"]'),
+  ];
+  for (const each of over) {
+    const rect = each?.getBoundingClientRect();
+    if (rect && rect.height > 0 && rect.left < box.right && rect.right > box.left && rect.bottom > box.top) bottom = Math.min(bottom, rect.top - 12);
+  }
+  return { x: box.left, y: box.top, width: box.width, height: Math.max(0, bottom - box.top) };
+}
+
+/** A menu over DevTools' pane or any dialog: the pane is a native view above the app, so it steps aside. */
+function layerOver(box: BrowserBounds): boolean {
+  if (document.querySelector("[role=dialog], [role=alertdialog]")) return true;
+  for (const layer of document.querySelectorAll("[data-radix-popper-content-wrapper]")) {
+    if (layer.querySelector("[data-slot=tooltip-content], [role=tooltip]")) continue;
+    const rect = layer.getBoundingClientRect();
+    if (rect.left < box.x + box.width && rect.right > box.x && rect.top < box.y + box.height && rect.bottom > box.y) return true;
+  }
+  return false;
 }
 
 /** Around the tab's page area: where it is laid out as a device, and DevTools beside or below it. */
@@ -155,7 +174,6 @@ export function BrowserDevFrame({ id, active, children }: { id: string; active: 
 
   // DevTools' pane follows its place as the tab's page follows its area.
   const opened = useRef(false);
-  const hole = `devtools:${id}`;
   useEffect(() => {
     const element = pane.current;
     if (!devtools || !ready || !element) return;
@@ -170,20 +188,19 @@ export function BrowserDevFrame({ id, active, children }: { id: string; active: 
     if (!active) return;
     let placed = "";
     const place = () => {
-      const bounds = element.closest("[inert]") ? null : usableBounds(element);
+      const usable = element.closest("[inert]") ? null : usableBounds(element);
+      const bounds = usable && !layerOver(usable) ? usable : null;
       const key = JSON.stringify(bounds);
       if (key === placed) return;
       placed = key;
       void placeDevTools(id, bounds).catch(() => {});
-      showPage(hole, bounds);
     };
     const stop = followLayout(() => [element], place);
     return () => {
       stop();
       void placeDevTools(id, null).catch(() => {});
-      showPage(hole, null);
     };
-  }, [id, hole, devtools, ready, active, dock]);
+  }, [id, devtools, ready, active, dock]);
 
   // The toggle turned off, or DevTools closed itself: the pane goes, and the keyboard back to the page.
   const wasOpen = useRef(false);

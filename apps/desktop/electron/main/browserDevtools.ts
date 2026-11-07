@@ -1,7 +1,12 @@
-// Section 9: DevTools docked in a <webview> of the app's own, a device's size and user agent, and the element picker.
+// Section 9: DevTools docked in a WebContentsView of the window, a device's size and user agent, and the element picker.
 // DevTools opens through beforeDevTools (L128): on a driven tab that is a take-over, so the in-flight call answers
 // "Paused: DevTools open". Device sizes need no debugger. The picker holds the debugger for as long as the user picks.
-import { session, webContents, type IpcMainInvokeEvent, type WebContents } from "electron";
+//
+// Not a <webview>: Electron binds DevTools' host to the contents' current frame as its first load commits, so a contents
+// that has navigated comes up unconnected (inspectable_web_contents.cc, ReadyToCommitNavigation), and a <webview> can't
+// attach without a load. Electron skips its own test of that case. A view lies above the app's page, so the app hides it
+// while a menu or dialog is over it (BrowserDevTools.tsx).
+import { BrowserWindow, webContents, WebContentsView, type IpcMainInvokeEvent, type WebContents } from "electron";
 
 import { handleFromApp } from "./appPage";
 import { beforeDevTools } from "./browserAgent";
@@ -10,32 +15,49 @@ import { agentScriptBody, sweptAndScrubbed } from "./browserAgentSecrets";
 /** The session of DevTools' front ends, in memory: it isn't a profile and holds nothing of one. */
 const FRONT_PARTITION = "brigadier-devtools";
 
-export const isDevToolsFrontPartition = (partition: string | undefined): boolean => partition === FRONT_PARTITION;
-
-/** A <webview> showing DevTools, which loads devtools:// and is no page: it gets none of a tab's handling. */
-export function isDevToolsFront(contents: WebContents): boolean {
-  return contents.session === session.fromPartition(FRONT_PARTITION);
-}
-
-/** A front end stays on DevTools: whatever it opens comes through `devtools-open-url` on its tab's guest. */
-export function installDevToolsFront(front: WebContents): void {
-  front.setWindowOpenHandler(() => ({ action: "deny" }));
-  front.on("will-navigate", (event) => {
-    if (!event.url.startsWith("devtools:")) event.preventDefault();
-  });
-}
-
 function guestFor(sender: WebContents, id: unknown): WebContents {
   const guest = typeof id === "number" ? webContents.fromId(id) : undefined;
   if (!guest || guest.isDestroyed() || guest.getType() !== "webview" || guest.hostWebContents !== sender) throw new Error("That page is gone.");
   return guest;
 }
 
-async function openDevTools(sender: WebContents, guest: WebContents, frontId: unknown): Promise<void> {
-  const front = guestFor(sender, frontId);
-  if (!isDevToolsFront(front)) throw new Error("That isn't a DevTools pane.");
+type Bounds = { x: number; y: number; width: number; height: number };
+
+/** Each tab's DevTools: its view, and the window holding it. */
+const fronts = new Map<number, { view: WebContentsView; window: BrowserWindow }>();
+
+function placeFront(guestId: number, bounds: Bounds | null): void {
+  const front = fronts.get(guestId);
+  if (!front) return;
+  front.view.setVisible(bounds !== null);
+  if (bounds) front.view.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height) });
+}
+
+function dropFront(guestId: number): void {
+  const front = fronts.get(guestId);
+  if (!front) return;
+  fronts.delete(guestId);
+  if (!front.window.isDestroyed()) front.window.contentView.removeChildView(front.view);
+  if (!front.view.webContents.isDestroyed()) front.view.webContents.close();
+}
+
+async function openDevTools(sender: WebContents, guest: WebContents, bounds: Bounds): Promise<void> {
+  if (fronts.has(guest.id)) return placeFront(guest.id, bounds);
+  const window = BrowserWindow.fromWebContents(sender);
+  if (!window) throw new Error("That window is gone.");
+  const view = new WebContentsView({ webPreferences: { partition: FRONT_PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  // A front end stays on DevTools: whatever it opens comes through `devtools-open-url` on its tab's guest.
+  view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  view.webContents.on("will-navigate", (event) => {
+    if (!event.url.startsWith("devtools:")) event.preventDefault();
+  });
+  fronts.set(guest.id, { view, window });
+  placeFront(guest.id, bounds);
+  window.contentView.addChildView(view);
   await beforeDevTools(guest);
-  guest.setDevToolsWebContents(front);
+  guest.once("devtools-closed", () => dropFront(guest.id));
+  guest.once("destroyed", () => dropFront(guest.id));
+  guest.setDevToolsWebContents(view.webContents);
   guest.openDevTools({ mode: "detach", activate: false });
 }
 
@@ -144,14 +166,17 @@ async function describe(guest: WebContents, backendNodeId: number): Promise<unkn
   return sweptAndScrubbed(guest, () => result.value);
 }
 
-type Args = { guest: number; front?: number; device?: Device };
+type Args = { guest: number; bounds?: Bounds | null; device?: Device };
 
 export function installBrowserDevtools(): void {
   handleFromApp("brigadier:devtools", (event: IpcMainInvokeEvent, op: string, args: Args) => {
     const guest = guestFor(event.sender, args.guest);
     switch (op) {
       case "open":
-        return openDevTools(event.sender, guest, args.front);
+        return openDevTools(event.sender, guest, args.bounds as Bounds);
+      case "place":
+        placeFront(guest.id, args.bounds ?? null);
+        return null;
       case "close":
         guest.closeDevTools();
         return null;

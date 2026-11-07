@@ -2432,6 +2432,10 @@ pub struct TerminalInfo {
     /// The shell it runs, and where.
     pub shell: String,
     pub cwd: String,
+    /// What its programs' `BROWSER` proves itself with to open a page in the app (see
+    /// `Terminals::browser_env`).
+    #[serde(default)]
+    pub open_token: String,
     /// Its latest output, for a tab opened again while it runs.
     pub scrollback: String,
 }

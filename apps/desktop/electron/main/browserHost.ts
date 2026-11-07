@@ -3,7 +3,7 @@
 import { app, webContents } from "electron";
 
 import { installBrowserAgent, watchGuest, watchNetwork } from "./browserAgent";
-import { installBrowserDevtools, installDevToolsFront, isDevToolsFront, isDevToolsFrontPartition, watchDevToolsLinks } from "./browserDevtools";
+import { installBrowserDevtools, watchDevToolsLinks } from "./browserDevtools";
 import { handleFromApp, isAppPage } from "./appPage";
 import { dev, unfocused } from "./identity";
 import { note } from "./events";
@@ -63,9 +63,7 @@ export function installBrowserHost(): void {
         if (details.level === "error") note("console-error", { webContents: contents.id, message: details.message.slice(0, 400), source: details.sourceId?.split("?")[0], line: details.lineNumber });
       });
     }
-    if (contents.getType() === "webview" && isDevToolsFront(contents)) {
-      installDevToolsFront(contents);
-    } else if (contents.getType() === "webview") {
+    if (contents.getType() === "webview") {
       watchDevToolsLinks(contents);
       // The Local Network prompt comes from WebRTC's local candidates; dev must show no dialog.
       if (unfocused) contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
@@ -81,8 +79,7 @@ export function installBrowserHost(): void {
       installGuest(contents);
     }
     contents.on("will-attach-webview", (attach, preferences, params) => {
-      const isFront = isDevToolsFrontPartition(params.partition) && params.src === "about:blank";
-      if (!isFront && (!profileSessions.has(params.partition ?? "") || !webOrBlank(params.src ?? ""))) {
+      if (!profileSessions.has(params.partition ?? "") || !webOrBlank(params.src ?? "")) {
         note("guest-refused", { host: contents.id, partition: params.partition, src: params.src });
         attach.preventDefault();
         return;

@@ -455,7 +455,6 @@ export function closePage(id: string): void {
   if (!page) return;
   answerFind(page, NOT_FOUND);
   dropOverlay(id);
-  document.querySelector(`#brigadier-devtools-layer webview[data-devtools-for="${CSS.escape(id)}"]`)?.remove();
   pages.delete(id);
   counters.closed += 1;
   page.element.remove();
