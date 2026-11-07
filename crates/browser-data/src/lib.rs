@@ -621,6 +621,66 @@ fn key_for(name: &str) -> String {
 mod tests {
     use super::*;
 
+    fn profile(dir: &std::path::Path, family: Family, service: Option<&str>) -> Profile {
+        Profile {
+            id: "made/up".to_owned(),
+            browser: "Made up".to_owned(),
+            name: "Made up".to_owned(),
+            family,
+            dir: dir.to_owned(),
+            app_path: None,
+            keychain_service: service.map(str::to_owned),
+            keychain_account: None,
+            local_state: None,
+            linux_secret_application: None,
+            has_cookies: false,
+            has_history: false,
+            has_bookmarks: false,
+            readable: true,
+            is_default: true,
+        }
+    }
+
+    #[test]
+    fn the_off_limits_key_is_named_and_never_read() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(key_off_limits(&profile(dir.path(), Family::Chromium, Some(OFF_LIMITS_KEY))));
+        assert!(!key_off_limits(&profile(dir.path(), Family::Chromium, Some("Made Up Safe Storage"))));
+        #[cfg(target_os = "macos")]
+        {
+            // Both answer without a Keychain call, so no prompt can follow.
+            assert!(matches!(chromium_password_exists(OFF_LIMITS_KEY, None), Ok(false)));
+            assert!(matches!(
+                chromium_password(OFF_LIMITS_KEY, None),
+                Err(Error::Keychain(KeychainError::NotFound))
+            ));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn chromium_s_linux_keyring_entry_is_off_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut branded = profile(dir.path(), Family::Chromium, None);
+        branded.linux_secret_application = Some("chromium".to_owned());
+        assert!(key_off_limits(&branded));
+    }
+
+    #[test]
+    fn a_profile_with_no_stores_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(profile_is_empty(&profile(dir.path(), Family::Chromium, None)));
+    }
+
+    #[test]
+    fn a_store_that_cannot_be_read_is_not_called_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Bookmarks"), "not json").unwrap();
+        let mut broken = profile(dir.path(), Family::Chromium, None);
+        broken.has_bookmarks = true;
+        assert!(!profile_is_empty(&broken));
+    }
+
     #[test]
     fn web_urls() {
         assert!(is_web_url("https://example.com"));

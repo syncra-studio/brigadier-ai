@@ -37,6 +37,11 @@ export function importSources(): Promise<ListedSource[]> {
   });
 }
 
+/** The browser each profile last had an import from, by profile; none where the shell keeps no imports. */
+export function importOrigins(): Promise<Partial<Record<string, string>>> {
+  return invoke<Partial<Record<string, string>> | null>("browser_import_origins").then((origins) => origins ?? {}, () => ({}));
+}
+
 /** The browsers as last listed, and when: the page shows them at once when it opens again. */
 export type ListedSources = { sources: ListedSource[]; atMs: number };
 let listed: ListedSources | null = null;

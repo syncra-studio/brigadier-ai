@@ -10,7 +10,8 @@ import { app, nativeImage, session, shell, webContents, type Session } from "ele
 import { addCommands, channelId, channelSender, type Args } from "./commands";
 import { importBookmarks } from "./browserBookmarks";
 import { importHistory } from "./browserHistory";
-import { cookieDetails, distinctDomains, firstImport, isGoogleCookie, type ReadCookie } from "./browserImportRules";
+import { cookieDetails, distinctDomains, firstImport, type ImportedRecord, type ImportedSources, importOrigins, isGoogleCookie, mergedRecord, passwordsStay, type ReadCookie } from "./browserImportRules";
+import { applyStagedStorage } from "./browserImportStaged";
 import { importLogins, loginSite, replaceLogins } from "./browserVault";
 import { replaceFile } from "./durableStorage";
 import { note } from "./events";
@@ -18,7 +19,6 @@ import { dev } from "./identity";
 import { native } from "./native";
 import { profileFolderName, profileOfStorage, profilePartition } from "./profiles";
 
-const SITE_STORAGE = ["Local Storage", "IndexedDB"];
 /** How long a read waits to be written before its passwords are let go of. */
 const READ_KEPT_MS = 2 * 60 * 1000;
 const COOKIES_AT_ONCE = 50;
@@ -44,26 +44,11 @@ type ReadProfile = {
 type Failed = { type: "failed"; reason: string; message: string };
 type Listed = { key: string; name: string; appPath: string; state: string; profiles: unknown[]; emptyProfiles: string[]; signIns: boolean; passwords: boolean };
 
-type Record = {
-  atMs: number;
-  profiles: string[];
-  imported: number;
-  skipped: number;
-  skippedDomains: string[];
-  skippedDomainCount: number;
-  appBoundDomains: string[];
-  history: number;
-  bookmarks: number;
-  passwords: number;
-  passwordsSkipped: number;
-  /** Importing over this profile found no usable password, so the ones it had were left alone. */
-  passwordsKept: boolean;
-  googleLeftOut: number;
-};
 /** What's kept of imports: each browser's last, each source profile's place here, and the notice seen. */
 type Saved = {
-  browsers?: Partial<globalThis.Record<string, { record?: Record; denied?: boolean }>>;
-  sources?: Partial<globalThis.Record<string, { into: string; atMs: number }>>;
+  /** Each source profile's last import, by its id, which the browser's row sums up. */
+  browsers?: Partial<Record<string, { records?: Partial<Record<string, ImportedRecord>>; denied?: boolean }>>;
+  sources?: ImportedSources;
   noticed?: boolean;
 };
 
@@ -112,7 +97,7 @@ async function listSources(): Promise<unknown[]> {
         ...source,
         state: source.state === "ready" && known?.denied ? "needsKeychainAccess" : source.state,
         icon: await iconOf(appPath),
-        record: known?.record ?? null,
+        record: mergedRecord(Object.values(known?.records ?? {}).filter((one) => one !== undefined)),
         imports: saved.sources ?? {},
         firstImport: firstImport(saved),
       };
@@ -172,28 +157,6 @@ async function bringSiteStorage(profileId: string, from: string): Promise<"copie
   }
   await native().importSiteStorage(from, path.join(stagedRoot(), profileFolderName(profileId)));
   return "nextStart";
-}
-
-/** Before any session opens: site storage an import left for this start. */
-function applyStagedStorage(): void {
-  let staged: string[];
-  try {
-    staged = fs.readdirSync(stagedRoot());
-  } catch {
-    return;
-  }
-  for (const folder of staged) {
-    const target = path.join(app.getPath("userData"), "Partitions", folder);
-    for (const name of SITE_STORAGE) {
-      const from = path.join(stagedRoot(), folder, name);
-      if (!fs.existsSync(from)) continue;
-      fs.mkdirSync(target, { recursive: true });
-      fs.rmSync(path.join(target, name), { recursive: true, force: true });
-      fs.renameSync(from, path.join(target, name));
-    }
-    fs.rmSync(path.join(stagedRoot(), folder), { recursive: true, force: true });
-    note("import-site-storage-applied", { folder });
-  }
 }
 
 async function writeProfile({ token, target, replace, progress }: Args, sender: Parameters<typeof channelSender>[0]) {
@@ -256,7 +219,7 @@ async function writeProfile({ token, target, replace, progress }: Args, sender: 
   let passwords = 0;
   let passwordsSkipped = read.loginsLeftOut;
   // replaceLogins with nothing usable would empty the profile, so that swap doesn't happen.
-  const passwordsKept = replacing && read.passwordsRead && !read.logins.some((login) => loginSite(login.url) && login.password);
+  const passwordsKept = passwordsStay(replacing, read.passwordsRead, read.logins, (login) => loginSite(login.url) !== null);
   if (passwordsKept) passwordsSkipped += read.logins.length;
   else if (read.logins.length > 0) {
     try {
@@ -269,7 +232,7 @@ async function writeProfile({ token, target, replace, progress }: Args, sender: 
     }
   }
   const domains = distinctDomains([...read.leftOutDomains, ...read.appBoundDomains, ...refused]);
-  const record: Record = {
+  const record: ImportedRecord = {
     atMs: Date.now(),
     profiles: [read.profileName],
     imported: cookies.length - refused.length,
@@ -286,9 +249,9 @@ async function writeProfile({ token, target, replace, progress }: Args, sender: 
   };
   changeSaved((saved) => {
     saved.noticed = true;
-    saved.sources = { ...saved.sources, [id]: { into: profileId, atMs: record.atMs } };
+    saved.sources = { ...saved.sources, [id]: { into: profileId, atMs: record.atMs, browser: waiting.name } };
     // A try at another part says nothing of what the import brought.
-    if (signIns) saved.browsers = { ...saved.browsers, [key]: { record } };
+    if (signIns) saved.browsers = { ...saved.browsers, [key]: { records: { ...saved.browsers?.[key]?.records, [id]: record } } };
   });
   note("import-written", { key, profileId, imported: record.imported, skipped: record.skipped, history, bookmarks, passwords, siteStorage, replacing });
   return {
@@ -302,13 +265,15 @@ async function writeProfile({ token, target, replace, progress }: Args, sender: 
 }
 
 export function installBrowserImport(): void {
-  applyStagedStorage();
+  // Before any session opens.
+  applyStagedStorage(stagedRoot(), path.join(app.getPath("userData"), "Partitions"), (folder) => note("import-site-storage-applied", { folder }));
   app.on("session-created", (created) => {
     const profileId = profileOfStorage(created.storagePath);
     if (profileId) openSessions.add(profileId);
   });
   addCommands({
     browser_import_sources: () => listSources(),
+    browser_import_origins: () => importOrigins(readSaved().sources ?? {}),
     browser_import_read: (args) => readProfile(args),
     browser_import_write: (args, { sender }) => writeProfile(args, sender),
     browser_import_open_access: () => {

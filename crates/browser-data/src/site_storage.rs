@@ -56,3 +56,37 @@ fn copy_tree(from: &Path, to: &Path) -> Result<usize, Error> {
     }
     Ok(copied)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn copies_each_folder_whole_in_place_of_the_old_and_leaves_lock_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, target) = (dir.path().join("from"), dir.path().join("target"));
+        write(&from.join("Local Storage/leveldb/000003.log"), "new");
+        write(&from.join("Local Storage/leveldb/LOCK"), "");
+        write(&from.join("Cookies"), "not site storage");
+        write(&target.join("Local Storage/leveldb/old.log"), "old");
+        write(&target.join("IndexedDB/kept"), "the source has none");
+
+        assert_eq!(copy_site_storage(&from, &target).unwrap(), 1);
+
+        let leveldb = target.join("Local Storage/leveldb");
+        let mut names: Vec<_> = std::fs::read_dir(&leveldb)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["000003.log"]);
+        assert!(target.join("IndexedDB/kept").exists());
+        assert!(!target.join("Cookies").exists());
+        assert!(!target.join("Local Storage.importing").exists());
+    }
+}

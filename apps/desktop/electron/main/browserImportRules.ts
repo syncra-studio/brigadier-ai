@@ -51,5 +51,66 @@ export function distinctDomains(domains: readonly string[], kept = 20): { shown:
   return { shown: [...seen].slice(0, kept), count: seen.size };
 }
 
+/** Where each source profile went last, by its id (`<browser key>/<profile>`). */
+export type ImportedSources = Partial<Record<string, { into: string; atMs: number; browser?: string }>>;
+
+/** The browser each Brigadier profile last had an import from, by profile. An entry from before names were kept goes by its key. */
+export function importOrigins(sources: ImportedSources): Record<string, string> {
+  const latest = new Map<string, { atMs: number; browser: string }>();
+  for (const [id, place] of Object.entries(sources)) {
+    if (!place || (latest.get(place.into)?.atMs ?? -1) > place.atMs) continue;
+    const key = id.split("/")[0] ?? id;
+    latest.set(place.into, { atMs: place.atMs, browser: place.browser ?? `${key.charAt(0).toUpperCase()}${key.slice(1)}` });
+  }
+  return Object.fromEntries([...latest].map(([profile, { browser }]) => [profile, browser]));
+}
+
+/** What one source profile's import brought. */
+export type ImportedRecord = {
+  atMs: number;
+  profiles: string[];
+  imported: number;
+  skipped: number;
+  skippedDomains: string[];
+  skippedDomainCount: number;
+  appBoundDomains: string[];
+  history: number;
+  bookmarks: number;
+  passwords: number;
+  passwordsSkipped: number;
+  /** Importing over this profile found no usable password, so the ones it had were left alone. */
+  passwordsKept: boolean;
+  googleLeftOut: number;
+};
+
+/** A browser's row: its source profiles' last imports summed up, naming each. Null with none. */
+export function mergedRecord(records: readonly ImportedRecord[]): ImportedRecord | null {
+  const [first] = records;
+  if (!first) return null;
+  const sum = (field: (record: ImportedRecord) => number) => records.reduce((total, record) => total + field(record), 0);
+  const domains = distinctDomains(records.flatMap((record) => record.skippedDomains));
+  return {
+    atMs: Math.max(...records.map((record) => record.atMs)),
+    profiles: records.flatMap((record) => record.profiles),
+    imported: sum((record) => record.imported),
+    skipped: sum((record) => record.skipped),
+    skippedDomains: domains.shown,
+    // Each record keeps only its first domains, so the same site may count once in each: at least this many.
+    skippedDomainCount: Math.max(domains.count, ...records.map((record) => record.skippedDomainCount)),
+    appBoundDomains: distinctDomains(records.flatMap((record) => record.appBoundDomains)).shown,
+    history: sum((record) => record.history),
+    bookmarks: sum((record) => record.bookmarks),
+    passwords: sum((record) => record.passwords),
+    passwordsSkipped: sum((record) => record.passwordsSkipped),
+    passwordsKept: records.some((record) => record.passwordsKept),
+    googleLeftOut: sum((record) => record.googleLeftOut),
+  };
+}
+
+/** Importing over a profile keeps its passwords when the source was read and has none usable: replacing would empty it. */
+export function passwordsStay<T extends { password: string }>(replacing: boolean, read: boolean, logins: readonly T[], hasSite: (login: T) => boolean): boolean {
+  return replacing && read && !logins.some((login) => login.password !== "" && hasSite(login));
+}
+
 /** The first import shows one notice; from the saved file, so it stays shown once. */
 export const firstImport = (saved: { noticed?: boolean }): boolean => saved.noticed !== true;

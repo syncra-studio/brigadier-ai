@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ProfileClearDialog } from "@/app/settings/ProfileClearDialog";
 import { ProfileDeleteDialog } from "@/app/settings/ProfileDeleteDialog";
@@ -12,7 +12,7 @@ import { RowText, SettingsCard, SettingsRow } from "@/components/shared";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { cn } from "@/lib/utils";
 import { openSettings, select } from "@/state/actions";
-import { counted } from "@/state/browserImport";
+import { counted, importOrigins } from "@/state/browserImport";
 import {
   type BrowserProfile,
   changeProfile,
@@ -26,8 +26,8 @@ import {
 import { useApp } from "@/state/store";
 
 /** How a profile started and how many sessions are on it. */
-export function profileLine(sessions: number): string {
-  return `Started empty · ${sessions === 0 ? "No sessions" : counted(sessions, "session", "sessions")}`;
+export function profileLine(sessions: number, importedFrom?: string): string {
+  return `${importedFrom ? `Imported from ${importedFrom}` : "Started empty"} · ${sessions === 0 ? "No sessions" : counted(sessions, "session", "sessions")}`;
 }
 
 export const openProfileDetail = (id: string) => select({ type: "settings", page: "browser", detail: { view: "profile", profile: id } });
@@ -39,6 +39,10 @@ export function ProfilesSection() {
   const places = useProfilePlaces((s) => s.sessions);
   const conversations = useApp((s) => s.conversations);
   const [creating, setCreating] = useState(false);
+  const [origins, setOrigins] = useState<Partial<Record<string, string>>>({});
+  useEffect(() => {
+    void importOrigins().then(setOrigins);
+  }, []);
   const { listRef, shown, dragging, grip } = useDragReorder<BrowserProfile, HTMLDivElement>({
     items: profiles,
     idOf: (profile) => profile.id,
@@ -66,6 +70,7 @@ export function ProfilesSection() {
                 isDefault={profile.id === fallback.id}
                 only={profiles.length === 1}
                 sessions={sessionsOn(profile.id, places, conversations)}
+                importedFrom={origins[profile.id]}
                 dragging={dragging === profile.id}
                 grip={grip(profile.id, index)}
               />
@@ -93,6 +98,7 @@ function ProfileRow({
   isDefault,
   only,
   sessions,
+  importedFrom,
   dragging,
   grip,
 }: {
@@ -100,6 +106,7 @@ function ProfileRow({
   isDefault: boolean;
   only: boolean;
   sessions: number;
+  importedFrom: string | undefined;
   dragging: boolean;
   grip: ReturnType<ReturnType<typeof useDragReorder>["grip"]>;
 }) {
@@ -119,7 +126,7 @@ function ProfileRow({
       <button type="button" className="flex min-w-0 flex-1 text-start" onClick={() => void openProfileDetail(profile.id)}>
         <RowText
           title={<span className="flex items-center gap-2">{profile.name}{isDefault && <Badge variant="secondary" className="font-normal">Default</Badge>}</span>}
-          line={profileLine(sessions)}
+          line={profileLine(sessions, importedFrom)}
         />
       </button>
       <div className="flex shrink-0 items-center gap-1">

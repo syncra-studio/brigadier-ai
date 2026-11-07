@@ -409,3 +409,82 @@ pub fn read(home: &Path, key: &str, id: &str, what: &Parts) -> ReadOutcome {
         Err(outcome) => outcome,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A profile folder holding nothing, so every store reads as absent.
+    const GONE: &str = "/nonexistent/made-up-browser-profile";
+
+    const ALL: Parts = Parts {
+        sign_ins: true,
+        history: true,
+        bookmarks: true,
+        passwords: true,
+    };
+
+    fn source(dir: &Path, family: Family, service: Option<&str>) -> (Source, Profile) {
+        let profile = Profile {
+            id: "made/up".to_owned(),
+            browser: "Made up".to_owned(),
+            name: "Made up".to_owned(),
+            family,
+            dir: dir.to_owned(),
+            app_path: None,
+            keychain_service: service.map(str::to_owned),
+            keychain_account: None,
+            local_state: None,
+            linux_secret_application: None,
+            has_cookies: false,
+            has_history: false,
+            has_bookmarks: false,
+            readable: true,
+            is_default: true,
+        };
+        let source = Source {
+            key: "made".to_owned(),
+            name: "Made up".to_owned(),
+            family,
+            app_path: dir.to_owned(),
+            profiles: vec![profile.clone()],
+        };
+        (source, profile)
+    }
+
+    #[test]
+    fn an_off_limits_key_reads_neither_sign_ins_nor_passwords() {
+        let (source, profile) = source(
+            Path::new(GONE),
+            Family::Chromium,
+            Some(brigadier_browser_data::OFF_LIMITS_KEY),
+        );
+        let read = read_profile(&source, &profile, &ALL).unwrap();
+        assert!(!read.sign_ins_read, "importing over a profile must not swap its sign-ins");
+        assert!(!read.passwords_read, "nor its passwords");
+        assert!(read.site_storage_from.is_none());
+    }
+
+    #[test]
+    fn a_source_with_no_saved_passwords_counts_as_read_where_passwords_may_be_read() {
+        let (source, profile) = source(Path::new(GONE), Family::Gecko, None);
+        let read = read_profile(&source, &profile, &ALL).unwrap();
+        assert!(read.sign_ins_read);
+        assert_eq!(read.passwords_read, PASSWORDS_HERE);
+        assert!(read.logins.is_empty());
+    }
+
+    #[test]
+    fn a_part_not_asked_for_is_not_read() {
+        let (source, profile) = source(Path::new(GONE), Family::Gecko, None);
+        let none = Parts { sign_ins: false, history: false, bookmarks: false, passwords: false };
+        let read = read_profile(&source, &profile, &none).unwrap();
+        assert!(!read.sign_ins_read && !read.passwords_read);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_refuses_passwords() {
+        const { assert!(!PASSWORDS_HERE) };
+    }
+}

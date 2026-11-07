@@ -11,6 +11,7 @@ import { BrowserImportPage } from "@/app/settings/BrowserImportPage";
 import { Toaster, TooltipProvider } from "@/components/overlays";
 import type { ImportProgress, ImportRecord, Request, Settings } from "@/ipc/generated";
 import type { ImportedOutcome, ImportedRecord, ListedSource } from "@/state/browserImport";
+import { allProfiles } from "@/state/browserProfiles";
 import { useApp } from "@/state/store";
 
 /*
@@ -149,7 +150,11 @@ mockIPC(async (command, payload) => {
       const done = (record: Partial<ImportedRecord>, more: Partial<Extract<ImportedOutcome, { type: "done" }>> = {}): ImportedOutcome => {
         const full: ImportedRecord = { ...ARC_RECORD, atMs: Date.now(), skipped: 0, skippedDomains: [], skippedDomainCount: 0, history: 0, ...record };
         // A retried part leaves the browser's record as the import left it.
-        if (options.signIns) patch(key, { record: full });
+        // The row sums up each source profile's last import, as main does.
+        if (options.signIns) {
+          const before = sources.find((each) => each.key === key)?.record;
+          patch(key, { record: before ? { ...full, profiles: [...before.profiles, ...full.profiles], imported: before.imported + full.imported, skipped: before.skipped + full.skipped, skippedDomains: [...before.skippedDomains, ...full.skippedDomains], skippedDomainCount: before.skippedDomainCount + full.skippedDomainCount } : full });
+        }
         return { type: "done", record: full, historyError: null, ...more };
       };
       switch (key) {
@@ -170,11 +175,12 @@ mockIPC(async (command, payload) => {
               history: 900,
               bookmarks: 40,
               passwords: 21,
+              googleLeftOut: 2,
             });
           }
           // Work's bookmarks can't be read once, and come on Try again.
           if (options.signIns) {
-            return done({ profiles: ["Work"], imported: 1194, history: 300, bookmarks: 0, passwords: 3 }, { bookmarksError: "Dia's bookmarks couldn't be read" });
+            return done({ profiles: ["Work"], imported: 1194, history: 300, bookmarks: 0, passwords: 0, passwordsKept: true }, { bookmarksError: "Dia's bookmarks couldn't be read" });
           }
           return done({ profiles: ["Work"], imported: 0, bookmarks: 12 });
         }
@@ -240,6 +246,7 @@ const results = () =>
     badge: text(element.querySelector('[data-slot="badge"]')),
     parts: all('[data-slot="import-part"]', element).map((part) => [part.dataset.mark, text(part)]),
     sites: all('[data-slot="import-site"]', element).map(text),
+    google: text(element.querySelector('[data-slot="import-google"]')),
   }));
 const bring = () => all('[role="checkbox"]', dialog() ?? document).slice(-4).map((box) => box.getAttribute("data-state"));
 const tickProfile = (name: string) =>
@@ -424,6 +431,8 @@ function Fixture() {
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 200));
         seen.readFailed = { description: readDialog()?.description, buttons: readDialog()?.buttons, profiles: results() };
+        // A browser that can't be read makes no profile.
+        seen.madeForFailedRead = allProfiles().some((each) => each.name === "Arc: Default");
         button("Done")?.click();
       },
       async () => {
