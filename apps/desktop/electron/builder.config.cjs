@@ -17,6 +17,8 @@ module.exports = {
   directories: { output: process.env.BRIGADIER_DIST ?? "../../target/electron-dist/host", buildResources: "electron/resources" },
   extraMetadata: {
     name: "brigadier",
+    description: "Brigadier",
+    homepage: "https://github.com/syncra-studio/brigadier-ai",
     main: "dist-electron/main.mjs",
     type: "module",
     ...(process.env.BRIGADIER_VERSION ? { version: process.env.BRIGADIER_VERSION } : {}),
@@ -91,6 +93,7 @@ module.exports = {
     icon: "src-tauri/icons",
     target: ["deb", "AppImage"],
     category: "Development",
+    maintainer: "Brigadier <noreply@brigadier.invalid>",
     extraFiles: [
       { from: inStage("sidecars/brigadierd"), to: "brigadierd" },
       { from: inStage("sidecars/brigadier"), to: "brigadier" },

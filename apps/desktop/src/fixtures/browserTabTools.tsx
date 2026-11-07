@@ -233,7 +233,7 @@ function Fixture() {
         text: text(prompt()).replace(/\s+/g, " "),
         above: prompt()?.hasAttribute("data-above-page"),
         modal: modalOpen(document.querySelectorAll(LAYERS)),
-        startAligned: box && addressBox ? Math.round(box.left - addressBox.left) : null,
+        startAligned: box && addressBox ? Math.abs(box.left - addressBox.left) <= 1 : null,
         below: box && addressBox ? box.top >= addressBox.bottom : null,
         buttons: all("button", prompt() ?? document).map((element) => text(element.querySelector(".sr-only")) || text(element)),
       };
@@ -242,6 +242,9 @@ function Fixture() {
       await wait(100);
       seen.promptStays = prompt() !== null;
       const answers = asked.length;
+      // The answers stay disabled a moment after the question shows, so a click meant for the page can't answer it.
+      const armed = (name: string) => until(() => button(name, prompt() ?? document)?.hasAttribute("disabled") === false);
+      await armed("Allow while visiting the site");
       button("Allow while visiting the site", prompt() ?? document)?.click();
       await until(() => prompt() === null);
       for (const [request, answer] of [[8, "Allow this time"], [9, "Never allow"], [10, "Close permission request"]] as const) {
@@ -249,6 +252,7 @@ function Fixture() {
         await until(() => prompt() !== null);
         await wait(50);
         if (request === 9) seen.microphoneOnly = text(prompt()).replace(/\s+/g, " ");
+        await armed(answer);
         button(answer, prompt() ?? document)?.click();
         await until(() => prompt() === null);
       }
@@ -270,6 +274,7 @@ function Fixture() {
       showTab(ID);
       await until(() => prompt() !== null);
       const back = text(prompt()).includes("meet.example");
+      await armed("Allow this time");
       button("Allow this time", prompt() ?? document)?.click();
       await until(() => prompt() === null);
       ask({ request: 13, origin: "https://behind.example", camera: true, microphone: false }, OTHER);

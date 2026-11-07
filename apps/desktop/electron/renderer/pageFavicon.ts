@@ -9,15 +9,15 @@ const fits = (value: unknown): value is string =>
 
 const toPng = (source: string) => new Promise<string | null>((done) => {
   const image = new Image();
-  image.onerror = () => done(null);
-  image.onload = () => {
+  image.addEventListener("error", () => done(null));
+  image.addEventListener("load", () => {
     try {
       const canvas = document.createElement("canvas");
       canvas.width = canvas.height = 32;
       canvas.getContext("2d")?.drawImage(image, 0, 0, 32, 32);
       done(canvas.toDataURL("image/png"));
     } catch { done(null); }
-  };
+  });
   image.src = source;
 });
 

@@ -26,17 +26,17 @@ export function fromAppPage(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
 const refused = (channel: string, event: IpcMainEvent | IpcMainInvokeEvent) =>
   note("ipc-refused", { channel, webContents: event.sender.id, url: event.senderFrame?.url ?? null });
 
-export function handleFromApp(channel: string, handler: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void {
+export function handleFromApp(channel: string, handler: (event: IpcMainInvokeEvent, ...args: never[]) => unknown): void {
   ipcMain.handle(channel, (event, ...args) => {
-    if (fromAppPage(event)) return handler(event, ...args);
+    if (fromAppPage(event)) return handler(event, ...(args as never[]));
     refused(channel, event);
     throw new Error(`${channel} is for the app's own page`);
   });
 }
 
-export function onFromApp(channel: string, listener: (event: IpcMainEvent, ...args: any[]) => void): void {
+export function onFromApp(channel: string, listener: (event: IpcMainEvent, ...args: never[]) => void): void {
   ipcMain.on(channel, (event, ...args) => {
-    if (fromAppPage(event)) listener(event, ...args);
+    if (fromAppPage(event)) listener(event, ...(args as never[]));
     else refused(channel, event);
   });
 }

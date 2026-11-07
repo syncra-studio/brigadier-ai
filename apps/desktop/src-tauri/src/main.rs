@@ -37,7 +37,7 @@ use brigadier_core::{ConventionsExport, ProjectId};
 use brigadier_ipc::app::{AppInfo, BridgeEvent, RunningChat, SmokeReport, UiMeasurements};
 use brigadier_ipc::protocol::{IpcError, Request, Response};
 use brigadier_sandbox::{Platform, PlatformOptions};
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 use brigadier_shell_native::browser_grants;
 use brigadier_shell_native::{bridge, browser_store, launcher, opening};
 use tauri::ipc::Channel;
