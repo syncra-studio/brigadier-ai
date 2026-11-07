@@ -20,11 +20,16 @@ const root = path.join(dist, folder);
 const app = process.platform === "darwin" ? path.join(root, "Brigadier.app") : root;
 rows.push(["Installed app, whole", mb(size(app))]);
 const parts = process.platform === "darwin"
-  ? { "Electron Framework": "Contents/Frameworks/Electron Framework.framework", Daemon: "Contents/MacOS/brigadierd", CLI: "Contents/MacOS/brigadier", "Computer-use helper binary": "Contents/Helpers/Brigadier Computer Use.app/Contents/MacOS", Addon: "Contents/Resources/shell_native.node", "App page and main": "Contents/Resources/app.asar", Locales: "Contents/Frameworks/Electron Framework.framework/Resources" }
+  ? { "Electron Framework": "Contents/Frameworks/Electron Framework.framework", Daemon: "Contents/MacOS/brigadierd", CLI: "Contents/MacOS/brigadier", "Computer-use helper binary": "Contents/Helpers/Brigadier Computer Use.app/Contents/MacOS", Addon: "Contents/Resources/shell_native.node", "App page and main": "Contents/Resources/app.asar" }
   : process.platform === "win32"
     ? { Daemon: "brigadierd.exe", CLI: "brigadier.exe", "Computer-use helper": "brigadier-cu.exe", Addon: "resources/shell_native.node", "App page and main": "resources/app.asar", Engine: "brigadier-app.exe", Locales: "locales" }
     : { Daemon: "brigadierd", CLI: "brigadier", "Computer-use helper": "brigadier-cu", Addon: "resources/shell_native.node", "App page and main": "resources/app.asar", Engine: "brigadier-app", Locales: "locales" };
 for (const [name, part] of Object.entries(parts)) if (fs.existsSync(path.join(app, part))) rows.push([`  ${name}`, mb(size(path.join(app, part)))]);
+
+if (process.platform === "darwin") {
+  const resources = path.join(app, "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources");
+  rows.push(["  Locales", mb(fs.readdirSync(resources).filter((name) => name.endsWith(".lproj")).reduce((sum, name) => sum + size(path.join(resources, name)), 0))]);
+}
 
 const facts = [];
 if (process.platform === "darwin") {

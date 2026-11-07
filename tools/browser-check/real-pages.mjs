@@ -20,7 +20,8 @@ const args = process.argv.slice(2);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const out = process.env.BRIGADIER_CHECK_OUT ?? fs.mkdtempSync(path.join(os.tmpdir(), "real-pages-"));
 fs.mkdirSync(out, { recursive: true });
-const PARTITION = "persist:browser-profile-default";
+const PROFILE = "real-pages-check";
+const PARTITION = `persist:browser-profile-${PROFILE}`;
 const PAGES = ["https://example.com/", "https://en.wikipedia.org/wiki/Chromium_(web_browser)", "https://github.com/", "https://www.mozilla.org/en-US/", "https://news.ycombinator.com/"];
 const failures = [];
 const expect = (what, passed, detail = "") => {
@@ -133,6 +134,8 @@ const local = `http://127.0.0.1:${server.address().port}/`;
 /** One <webview> under the page's policy, in the page's own stack; its web contents once the main frame has finished or failed. */
 async function openGuest(url) {
   const before = new Set((await control("guests")).map((guest) => guest.id));
+  // As a tab does: main attaches a guest only to a partition it was asked for.
+  await host(`window.brigadierShell.profilePartition(${JSON.stringify(PROFILE)})`);
   await host(`(()=>{const w=document.createElement("webview");w.id="real-guest";window.__realGuest={};w.addEventListener("did-fail-load",(e)=>{if(e.isMainFrame&&e.errorCode!==-3)window.__realGuest.failed=e.errorCode+" "+e.errorDescription});w.addEventListener("render-process-gone",(e)=>{window.__realGuest.gone=e.reason});w.addEventListener("did-finish-load",()=>{window.__realGuest.finished=true});w.setAttribute("partition",${JSON.stringify(PARTITION)});w.src=${JSON.stringify(url)};w.style.cssText="position:fixed;left:0;top:0;width:1200px;height:760px;z-index:99999";document.body.appendChild(w);return true})()`);
   for (let tries = 0; tries < 600; tries++) {
     await sleep(100);
@@ -210,7 +213,7 @@ server.close();
 await driver.finish();
 
 // Read once Chromium has let go of the file. On a kept-alive instance, from a copy.
-const profile = path.join(driver.data, "Partitions/browser-profile-default");
+const profile = path.join(driver.data, `Partitions/browser-profile-${PROFILE}`);
 const cookies = [path.join(profile, "Network/Cookies"), path.join(profile, "Cookies")].find((file) => fs.existsSync(file));
 if (cookies) {
   const copy = path.join(out, "cookies-copy");
