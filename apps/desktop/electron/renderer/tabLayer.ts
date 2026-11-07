@@ -293,7 +293,7 @@ function listen(page: Page): void {
 /** Opens in flight: React's strict effects ask twice, and there must be one page per tab. */
 const opening = new Map<string, Promise<void>>();
 
-export function openPage(id: string, url: string, bounds: BrowserBounds, emit: (event: BrowserEvent) => void, agent = false): Promise<void> {
+export function openPage(id: string, url: string, bounds: BrowserBounds, emit: (event: BrowserEvent) => void, agent = false, restored = false): Promise<void> {
   const inFlight = opening.get(id);
   if (inFlight) return inFlight;
   const existing = pages.get(id);
@@ -302,12 +302,12 @@ export function openPage(id: string, url: string, bounds: BrowserBounds, emit: (
     load(existing, url);
     return Promise.resolve();
   }
-  const open = makePage(id, url, bounds, emit, agent).finally(() => opening.delete(id));
+  const open = makePage(id, url, bounds, emit, agent, restored).finally(() => opening.delete(id));
   opening.set(id, open);
   return open;
 }
 
-async function makePage(id: string, url: string, bounds: BrowserBounds, emit: (event: BrowserEvent) => void, agent: boolean): Promise<void> {
+async function makePage(id: string, url: string, bounds: BrowserBounds, emit: (event: BrowserEvent) => void, agent: boolean, restored: boolean): Promise<void> {
   // By import, not at the top: this module runs before the app's state may.
   const { pinTabToItsProfile, profilesLoaded } = await import("@/state/browserProfilePlaces");
   await profilesLoaded();
@@ -319,7 +319,7 @@ async function makePage(id: string, url: string, bounds: BrowserBounds, emit: (e
   const page: Page = { id, element, profileId, emit, ready: false, finding: null, shown: false, placed: false, url, loading: true };
   pages.set(id, page);
   listen(page);
-  if (agent) element.addEventListener("did-attach", () => void window.brigadierShell.browserData("agentGuest", { webContents: element.getWebContentsId() }), { once: true });
+  element.addEventListener("did-attach", () => void window.brigadierShell.browserData("guest", { webContents: element.getWebContentsId(), agent, restored }), { once: true });
   place(page, bounds);
   page.placed = false;
   element.style.visibility = "hidden";

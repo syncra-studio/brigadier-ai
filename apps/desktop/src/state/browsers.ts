@@ -7,7 +7,7 @@ import { listen } from "@/ipc/native";
 import { pageUsed } from "@/state/agentPause";
 import { closeFind, findState, forgetFind } from "@/state/browserFind";
 import { shareTabProfile } from "@/state/browserProfilePlaces";
-import { closeTabAnywhere, openPopupTab, sessionTabs } from "@/state/sessionTabs";
+import { closeTabAnywhere, openPopupTab, sessionTabs, sessionWith } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -85,6 +85,10 @@ export async function openPage(
   agent = false,
 ): Promise<void> {
   const page = useBrowsers.getState().pages[id];
+  // A tab with a title and no page has shown this before: a restart brought it back, which is no new visit. Read
+  // here, since the new page's empty title is about to reach the tab.
+  const session = sessionWith(id);
+  const restored = !page && Boolean(session) && sessionTabs(session as string).tabs.some((tab) => tab.id === id && tab.kind === "browser" && Boolean(tab.title));
   useBrowsers.setState(({ pages }) => ({
     pages: {
       ...pages,
@@ -146,7 +150,7 @@ export async function openPage(
       }
       else if (event.type === "blocked") update(id, { blocked: event.url, loading: false });
       else if (event.type === "passkeyRefused") update(id, { passkeyRefused: true });
-    });
+    }, restored);
     if (!useBrowsers.getState().pages[id]) { await browserClose(id); return; }
     made.add(id);
     update(id, { ready: true });
