@@ -40,7 +40,7 @@ test("browser tab tools: address suggestions, the page's question for the camera
     text: "meet.example wants toClose permission requestUse your cameraUse your microphoneAllow while visiting the siteAllow this timeNever allow",
     above: true,
     modal: false,
-    startAligned: 1,
+    startAligned: true,
     below: true,
     buttons: ["Close permission request", "Allow while visiting the site", "Allow this time", "Never allow"],
   });

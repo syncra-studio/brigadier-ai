@@ -150,7 +150,7 @@ const closeGuest = () => host(`document.getElementById("real-guest").remove(),tr
 await driver.open();
 const report = { platform: process.platform, arch: process.arch, info: await control("info"), pages: [], sandbox: [], video: null, cookie: null, keychain: null };
 console.log(`Electron ${report.info.electron}, Chromium ${report.info.chrome}, ${process.platform} ${process.arch}`);
-for (let tries = 0; tries < 240 && !(await host(`location.protocol==="app:"&&document.readyState==="complete"`)); tries++) await sleep(250);
+for (let tries = 0; tries < 240 && !(await host(`document.readyState==="complete"`)); tries++) await sleep(250);
 
 const readSandbox = sandboxReader(out);
 function readAll(metrics, guests) {

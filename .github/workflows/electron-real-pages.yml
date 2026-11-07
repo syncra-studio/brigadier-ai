@@ -124,6 +124,7 @@ jobs:
           case "$RUNNER_OS" in
             macOS) app="$dist/mac$([ "${{ matrix.arch }}" = arm64 ] && echo -arm64)/Brigadier.app/Contents/MacOS/brigadier-app"; "$app" --smoke || true ;;
             Windows)
+              LOCALAPPDATA="$(cygpath -u "$LOCALAPPDATA")"
               installer="$(ls "$dist"/*.exe | head -n 1)"
               "$installer" //S
               ls -d "$LOCALAPPDATA"/Programs/*/ | tail -n 5
@@ -138,6 +139,7 @@ jobs:
       - name: Windows' uninstaller leaves the data
         if: runner.os == 'Windows'
         run: |
+          LOCALAPPDATA="$(cygpath -u "$LOCALAPPDATA")"
           data="$LOCALAPPDATA/Brigadier/Data"
           ls "$data" | head -n 5
           echo made-up >"$data/uninstall-check.txt"
