@@ -246,6 +246,8 @@
   /* The model picker: one height whatever it shows, so a tab or a model never resizes it. */
   --spacing-model-picker-height: 22.25rem;
   --container-model-picker: 33.75rem;
+  /* The browser tab's profile menu. */
+  --spacing-browser-profiles: 18rem;
   /* A plugin's file open from Settings › Plugins (a skill's SKILL.md, a server's settings): a
      file tab's room in a dialog. */
   --container-plugin-file: min(96rem, calc(100vw - 4rem));
@@ -431,7 +433,6 @@
   --text-browser: 0.8125rem;
   --text-browser--line-height: 1.125rem;
   --spacing-browser-site-info: 20rem;
-  --spacing-browser-profiles: 18rem;
   --spacing-browser-downloads: 22rem;
   --spacing-browser-zoom: 1.625rem;
   --spacing-browser-zoom-value: 2.75rem;
