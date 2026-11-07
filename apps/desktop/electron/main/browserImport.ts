@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { app, session, shell, webContents, type Session } from "electron";
+import { app, nativeImage, session, shell, webContents, type Session } from "electron";
 
 import { addCommands, channelId, channelSender, type Args } from "./commands";
 import { importBookmarks } from "./browserBookmarks";
@@ -95,7 +95,9 @@ const icons = new Map<string, string | null>();
 
 async function iconOf(file: string): Promise<string | null> {
   if (!icons.has(file)) {
-    icons.set(file, await app.getFileIcon(file, { size: "large" }).then((image) => image.toDataURL(), () => null));
+    // app.getFileIcon ends the whole app on macOS (SIGTRAP on Electron's build here), even for Safari.
+    const icon = process.platform === "darwin" ? nativeImage.createThumbnailFromPath(file, { width: 64, height: 64 }) : app.getFileIcon(file, { size: "large" });
+    icons.set(file, await icon.then((image) => image.toDataURL(), () => null));
   }
   return icons.get(file) ?? null;
 }
