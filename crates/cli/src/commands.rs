@@ -439,7 +439,7 @@ pub const COMMANDS: &[Command] = &[
         details: "Returns at the first: a turn ended (with its last message, and what git and \
                   its CLI showed: its commits, merged or not, uncommitted files, the commands \
                   it ran and how each exited), needs input, \
-                  failed, interrupted, gone, usage limit, fresh context, quiet (20 minutes \
+                  failed, interrupted, gone, usage limit, quiet (20 minutes \
                   without a word while it works), stalled (a background command with no new \
                   output and almost no CPU for 10 minutes: look at it, say so in the thread, \
                   and don't wait on it), starved (a compile held up 10 minutes behind the build \

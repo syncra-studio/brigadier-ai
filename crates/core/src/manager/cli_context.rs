@@ -13,7 +13,7 @@ use super::plugins::resolve::{Resolved, Role as PluginRole};
 use crate::accounts::AccountRef;
 use brigadier_cli::protocol::{
     CliReply, ContextEntry, ContextFile, ContextItem, ContextOutput, ContextPart, ContextPartSize,
-    ErrorCode,
+    ErrorCode, SessionTokens, TokenCounts, TokenRow,
 };
 use brigadier_providers::{McpStatus, McpTransport};
 
@@ -23,6 +23,7 @@ use super::cli_ledger::{Entry, Kind, Ledger, LedgerFile};
 use super::long_sessions::checkpoint;
 use super::records::{RecordRead, RecordSearch};
 use crate::model::{ConversationId, MessageRole, Setup};
+use crate::routing::store::OwnerTokens;
 use crate::tools::Role;
 use crate::work::{Approval, ApprovalSubject, CardState, Question, Task};
 use crate::{Error, Result};
@@ -74,6 +75,41 @@ impl Whose {
     fn plain(&self) -> Option<&crate::work::PlainWorker> {
         self.task.as_ref().and_then(|task| task.plain.as_ref())
     }
+}
+
+/// The stored rows as `brigadier state` gives them; `worker`: a task's id and title.
+fn session_tokens(
+    used: Vec<OwnerTokens>,
+    worker: impl Fn(&str) -> Option<(String, String)>,
+) -> SessionTokens {
+    let mut tokens = SessionTokens::default();
+    for row in used {
+        let counts = TokenCounts {
+            input: row.input,
+            cache_read: row.cached_input,
+            cache_write: row.cache_write,
+            output: row.output,
+        };
+        tokens.session.add(&counts);
+        let step = row.step.unwrap_or_else(|| "other".into());
+        let (who, id) = match row.task_id.as_deref().map(|id| (id, worker(id))) {
+            Some((_, Some((id, title)))) => (title, Some(id)),
+            // A review's, or a deleted worker's.
+            Some((id, None)) if step == "worker" => (step, Some(super::cli::short(id))),
+            _ => (step, None),
+        };
+        tokens.rows.push(TokenRow {
+            who,
+            worker: id,
+            agent: row.provider,
+            model: row.model,
+            counts,
+        });
+    }
+    tokens
+        .rows
+        .sort_by_key(|row| std::cmp::Reverse(row.counts.total()));
+    tokens
 }
 
 impl SessionManager {
@@ -207,7 +243,9 @@ impl SessionManager {
                         ContextPart::Project => Some(count(output.files.len())),
                         _ => None,
                     };
-                    if INLINE.contains(&part) && tokens(&output.text) <= INLINE_TOKENS {
+                    // A worker's task is what it must never lose, however long.
+                    let whole = part == ContextPart::Brief && whose.worker();
+                    if INLINE.contains(&part) && (whole || tokens(&output.text) <= INLINE_TOKENS) {
                         inline.push((part, output.text.clone()));
                     }
                     (entries, lines(&output.text), tokens(&output.text))
@@ -239,6 +277,11 @@ impl SessionManager {
                 brigadier_cli::render::workers(&workers)
             ));
         }
+        let tokens = self.context_tokens(&whose.conversation).await?;
+        text.push_str(&format!(
+            "\n## tokens: Used by this session and its workers, from each turn's report (31 days kept)\n{}",
+            brigadier_cli::render::tokens(&tokens)
+        ));
         for (part, body) in &inline {
             text.push_str(&format!(
                 "\n## {}: {}\n{}",
@@ -287,7 +330,24 @@ impl SessionManager {
             items: Vec::new(),
             files: Vec::new(),
             models: None,
+            tokens: Some(tokens),
         })
+    }
+
+    /// What the session and each of its workers used, by model, largest first.
+    async fn context_tokens(&self, conversation: &ConversationId) -> Result<SessionTokens> {
+        let Some(store) = self.runtime.routing_store() else {
+            return Ok(SessionTokens::default());
+        };
+        let used = store.conversation_tokens(conversation.0.clone()).await?;
+        // A closed worker's use counts too.
+        let tasks = self.core.tasks(conversation).await?;
+        Ok(session_tokens(used, |id| {
+            tasks
+                .iter()
+                .find(|task| task.id.0 == id)
+                .map(|task| (super::cli::short(id), task.title.clone()))
+        }))
     }
 
     /// Every part but `transcript` and `skills`, which take arguments.
@@ -300,6 +360,7 @@ impl SessionManager {
             items: Vec::new(),
             files: Vec::new(),
             models: None,
+            tokens: None,
         };
         match part {
             ContextPart::Waiting => {
@@ -398,7 +459,7 @@ impl SessionManager {
             .iter()
             .find(|message| message.role == MessageRole::User)
         {
-            Some(first) => Ok(format!("{}\n", self.full_text(first).await.trim_end())),
+            Some(first) => Ok(format!("{}\n", self.full_words(first).await.trim_end())),
             None => Ok("No request yet.\n".into()),
         }
     }
@@ -506,6 +567,7 @@ impl SessionManager {
             items: Vec::new(),
             files: Vec::new(),
             models: None,
+            tokens: None,
         })
     }
 
@@ -665,6 +727,7 @@ fn skills_output(
         items: Vec::new(),
         files: Vec::new(),
         models: None,
+        tokens: None,
     };
     if let Some(name) = name {
         let skill = resolved
@@ -977,6 +1040,54 @@ mod tests {
     use brigadier_registry::{Catalog, Roots};
 
     use super::*;
+
+    /// The session's total is every row's; each owner keeps its model apart, largest first, and
+    /// a worker reads by its short id and title.
+    #[test]
+    fn state_sums_the_stored_rows_by_owner_and_model() {
+        let row = |task: Option<&str>, step: &str, model: &str, input| OwnerTokens {
+            task_id: task.map(Into::into),
+            step: Some(step.into()),
+            provider: "claude".into(),
+            model: model.into(),
+            input,
+            cached_input: 10,
+            cache_write: 2,
+            output: 1,
+        };
+        let tokens = session_tokens(
+            vec![
+                row(None, "thread", "opus", 5),
+                row(Some("t1"), "worker", "haiku", 100),
+                row(Some("t1"), "worker", "sonnet", 50),
+                row(Some("review:1"), "review", "opus", 1),
+            ],
+            |id| (id == "t1").then(|| ("t1".to_owned(), "Fix it".to_owned())),
+        );
+        assert_eq!(
+            tokens.session,
+            TokenCounts {
+                input: 156,
+                cache_read: 40,
+                cache_write: 8,
+                output: 4,
+            }
+        );
+        let rows: Vec<_> = tokens
+            .rows
+            .iter()
+            .map(|row| (row.who.as_str(), row.worker.as_deref(), row.model.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("Fix it", Some("t1"), "haiku"),
+                ("Fix it", Some("t1"), "sonnet"),
+                ("thread", None, "opus"),
+                ("review", None, "opus"),
+            ]
+        );
+    }
 
     fn write(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

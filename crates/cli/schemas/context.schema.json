@@ -69,6 +69,43 @@
         }
       }
     },
-    "models": {"type": "object", "description": "routing: what `brigadier models --json` prints."}
+    "models": {"type": "object", "description": "routing: what `brigadier models --json` prints."},
+    "tokens": {
+      "type": "object",
+      "description": "The overview: tokens the session and each of its workers used, by model, from the stored turns of the last 31 days.",
+      "required": ["session", "rows"],
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "type": "object",
+          "required": ["input", "cacheRead", "cacheWrite", "output"],
+          "additionalProperties": false,
+          "properties": {
+            "input": {"type": "integer"},
+            "cacheRead": {"type": "integer"},
+            "cacheWrite": {"type": "integer"},
+            "output": {"type": "integer"}
+          }
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["who", "agent", "model", "input", "cacheRead", "cacheWrite", "output"],
+            "additionalProperties": false,
+            "properties": {
+              "who": {"type": "string"},
+              "worker": {"type": "string"},
+              "agent": {"type": "string"},
+              "model": {"type": "string"},
+              "input": {"type": "integer"},
+              "cacheRead": {"type": "integer"},
+              "cacheWrite": {"type": "integer"},
+              "output": {"type": "integer"}
+            }
+          }
+        }
+      }
+    }
   }
 }

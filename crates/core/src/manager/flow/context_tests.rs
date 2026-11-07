@@ -660,3 +660,54 @@ async fn saving_a_library_skill_cannot_follow_a_skills_root_into_a_project() {
     assert_eq!(std::fs::read_to_string(source).unwrap(), original);
     flow.stop().await;
 }
+
+/// A session's brief is everything the user wrote in its first message, its pasted text in its
+/// place, never the `[Pasted text #1]` that stands for it.
+#[tokio::test]
+async fn a_sessions_brief_keeps_its_pasted_text() {
+    let brief = Arc::new(Mutex::new(Value::Null));
+    let got = brief.clone();
+    let script: Script = Arc::new(move |turn| {
+        let got = got.clone();
+        Box::pin(async move {
+            if turn.conversation().is_some() {
+                *got.lock().unwrap() = brigadier(&turn, context(Some(ContextPart::Brief))).await;
+            }
+            Reply::text("ok")
+        })
+    });
+    let flow = Flow::start("context-brief-paste", Options::default(), script).await;
+    let mut pasted = flow
+        .core
+        .add_attachment(
+            "Pasted text.md".into(),
+            "text/markdown".into(),
+            b"the pasted requirement".to_vec(),
+            true,
+        )
+        .await
+        .unwrap();
+    pasted.inline = Some(1);
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            "Do this: [Pasted text #1]".into(),
+            vec![pasted],
+            Vec::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    flow.settled().await;
+    let text = brief.lock().unwrap()["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(text.contains("the pasted requirement"), "{text}");
+    assert!(
+        text.starts_with("Do this: [Pasted text #1, pasted here"),
+        "{text}"
+    );
+    flow.stop().await;
+}

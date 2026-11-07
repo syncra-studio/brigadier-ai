@@ -39,6 +39,7 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     chore_effort: None,
     coauthors_in_instructions: false,
     compaction: None,
+    worker_compaction: None,
     brigadier_compacts: false,
     subagent_transcripts: false,
     output_hook: false,

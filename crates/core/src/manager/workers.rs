@@ -935,14 +935,14 @@ impl SessionManager {
                 cwd.clone()
             }),
             keeps_detached: false,
-            // It compacts as its CLI does.
+            // It compacts by itself, at the seam's point where its CLI can be told one.
             auto_compact: true,
             allowed_models,
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
             output_hook: None,
             stop_hook: None,
             naked_worker: task.plain.is_some(),
-            native_compaction: None,
+            native_compaction: self.worker_compaction(provider),
             // Its temp folder names its session, so Delete and the sweep find it (D7).
             temp_tag: Some(task.conversation_id.short().to_owned()),
         };
@@ -1847,14 +1847,16 @@ impl SessionManager {
                 )
                 .await;
             }
-            // Its CLI keeps its own context, as it would in a terminal; its session hears when
-            // it compacts. Its third compaction in one CLI session, or a failed one, hands it
-            // to a fresh one (D14).
-            ProviderEvent::CompactionStarted { .. } => {
-                self.plain_fresh_context(live);
-            }
-            ProviderEvent::CompactionEnded { error, .. } => {
-                self.worker_compacted(live, cli, error.as_deref()).await;
+            // Its CLI keeps its own context, as it would in a terminal, and its session isn't
+            // woken for it. Its third compaction in one CLI session, one that leaves it near its
+            // point, or a failed one, hands it to a fresh one (D14).
+            ProviderEvent::CompactionEnded {
+                tokens_after,
+                error,
+                ..
+            } => {
+                self.worker_compacted(live, cli, *tokens_after, error.as_deref())
+                    .await;
             }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());
@@ -1982,7 +1984,7 @@ impl SessionManager {
                 let (manager, live) = (self.arc(), live.clone());
                 self.spawn(async move {
                     manager
-                        .worker_seam_turn_end(&live, &task, seam, status, compacted)
+                        .worker_seam_turn_end(&live, &task, seam, status)
                         .await;
                 });
             }

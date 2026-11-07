@@ -204,7 +204,7 @@ async fn worker(turn: &Turn, seen: &Seen) -> Reply {
     if said.contains("Compact-now.") {
         turn.emit(ProviderEvent::CompactionStarted { automatic: true })
             .await;
-        return Reply::text("Compacted, then finished.");
+        return Reply::text("Compacted, then finished: its session hears only that.");
     }
     if said.contains("Sign-in.") {
         turn.emit(ProviderEvent::McpServers {
@@ -1043,7 +1043,6 @@ async fn every_fault_of_a_worker_reaches_an_idle_parent_once() {
         ("Fail-now", "failed"),
         ("Crash-now", "stopped"),
         ("Limit-now", "hit a usage limit"),
-        ("Compact-now", "compacted its context"),
         ("Compact-now", "finished"),
         ("Sign-in", "asks"),
         ("Sign-in", "finished"),

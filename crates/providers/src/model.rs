@@ -1776,6 +1776,10 @@ pub struct NativeCompaction {
     pub backstop_window: Option<i64>,
     /// Codex: `model_auto_compact_token_limit`. `None`: Codex's own point (run2-D6).
     pub codex_limit: Option<i64>,
+    /// Claude: what its summary must keep when it compacts by itself, through a `PreCompact`
+    /// hook whose output it appends to the compaction's instructions: a worker's long turn gets
+    /// no Brigadier `/compact`. Codex and OpenCode take none.
+    pub compact_keep: Option<String>,
 }
 
 /// The models a session's native subagents may run on, derived only from the user's model

@@ -338,6 +338,55 @@ fn worker_rows(workers: &[WorkerRow]) -> String {
     table(&rows)
 }
 
+/// A token count, short: 411.8M, 2.6k, 950.
+fn token_count(tokens: i64) -> String {
+    match tokens {
+        n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1_000_000.0),
+        n if n >= 1_000 => format!("{:.1}k", n as f64 / 1_000.0),
+        n => n.to_string(),
+    }
+}
+
+/// `brigadier state`'s token section: the session, then each owner by model.
+pub fn tokens(output: &crate::protocol::SessionTokens) -> String {
+    let cells = |who: String, model: String, counts: &crate::protocol::TokenCounts| {
+        vec![
+            who,
+            model,
+            token_count(counts.total()),
+            token_count(counts.input),
+            token_count(counts.cache_read),
+            token_count(counts.cache_write),
+            token_count(counts.output),
+        ]
+    };
+    let mut rows = vec![
+        [
+            "WHO",
+            "MODEL",
+            "TOTAL",
+            "INPUT",
+            "CACHE READ",
+            "CACHE WRITE",
+            "OUTPUT",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        cells("session".into(), "all".into(), &output.session),
+    ];
+    for row in &output.rows {
+        rows.push(cells(
+            match &row.worker {
+                Some(id) => format!("{id} {}", row.who),
+                None => row.who.clone(),
+            },
+            format!("{} {}", row.agent, row.model),
+            &row.counts,
+        ));
+    }
+    table(&rows)
+}
+
 pub fn workers(output: &WorkersOutput) -> String {
     if output.workers.is_empty() {
         return "This session has no workers.\n".into();
@@ -1168,6 +1217,35 @@ mod tests {
     use super::*;
     use crate::models::{Account, ModelsOutput, Usage};
     use crate::protocol::ProviderKind;
+
+    #[test]
+    fn state_shows_tokens_apart_and_short() {
+        let counts = crate::protocol::TokenCounts {
+            input: 950,
+            cache_read: 367_631_709,
+            cache_write: 41_491_698,
+            output: 2_600,
+        };
+        let text = tokens(&crate::protocol::SessionTokens {
+            session: counts,
+            rows: vec![crate::protocol::TokenRow {
+                who: "Fix it".into(),
+                worker: Some("f58f7f4e".into()),
+                agent: "claude".into(),
+                model: "haiku".into(),
+                counts,
+            }],
+        });
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "{text}");
+        assert!(lines[0].contains("CACHE READ"), "{text}");
+        assert!(lines[1].starts_with("session"), "{text}");
+        for cell in ["409.1M", "950", "367.6M", "41.5M", "2.6k"] {
+            assert!(lines[1].contains(cell), "{cell}: {text}");
+        }
+        assert!(lines[2].starts_with("f58f7f4e Fix it"), "{text}");
+        assert!(lines[2].contains("claude haiku"), "{text}");
+    }
 
     /// #710: `brigadier wait` says when a usage limit resets.
     #[test]

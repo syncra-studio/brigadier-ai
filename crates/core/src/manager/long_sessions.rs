@@ -107,6 +107,21 @@ impl SessionManager {
         let config = self.seam_config();
         Some(compaction(provider)?(config.tokens, config.tokens_set))
     }
+
+    /// How a worker's CLI on `provider` compacts by itself: at the seam's point, keeping what a
+    /// thread's `/compact` keeps, as its turn may run through it. The user's own window or
+    /// limit wins, as for a thread. `None`: as its CLI does.
+    pub(super) fn worker_compaction(&self, provider: ProviderKind) -> Option<NativeCompaction> {
+        let config = self.seam_config();
+        let mode = config.long?;
+        let at = brigadier_providers::adapters::adapter(provider)?.worker_compaction?;
+        Some(NativeCompaction {
+            compact_keep: mode
+                .compact_instructions()
+                .map(|words| format!("{WORKER_KEEP} {words}")),
+            ..at(config.tokens)
+        })
+    }
 }
 
 /// How `provider` compacts in place for a long session ([`brigadier_providers::adapters`]).
@@ -133,6 +148,10 @@ commit hashes, command lines, and Brain ids as `brigadier brain search` and `bri
 so it can be read again word for word. \
 Never copy a secret (a key, token or password) into the summary. \
 End the summary with this line: next: run `brigadier context`.";
+
+/// What a worker's summary keeps first: what it was asked. `brigadier context` holds it whole.
+const WORKER_KEEP: &str = "\
+Keep, word for word, your task as your session gave it and everything it sent you since.";
 
 impl LongSessions {
     /// The words after Claude's `/compact` in this mode: what its summary must keep (run2-D7).
@@ -211,6 +230,23 @@ mod tests {
         ] {
             assert_eq!(LongSessions::parse(value), mode, "{value:?}");
         }
+    }
+
+    /// The CLI's own compaction point for a worker: Claude's window, Codex's limit, always at the
+    /// point given; OpenCode's own.
+    #[test]
+    fn a_workers_cli_is_told_the_point_where_it_can_be() {
+        use brigadier_providers::adapters::adapter;
+        let at = |provider| adapter(provider).unwrap().worker_compaction;
+        assert_eq!(
+            at(ProviderKind::Claude).unwrap()(200_000).backstop_window,
+            Some(220_000)
+        );
+        assert_eq!(
+            at(ProviderKind::Codex).unwrap()(200_000).codex_limit,
+            Some(200_000)
+        );
+        assert!(at(ProviderKind::OpenCode).is_none());
     }
 
     #[test]

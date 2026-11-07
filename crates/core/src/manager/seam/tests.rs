@@ -1105,3 +1105,15 @@ fn a_same_cli_handoff_says_what_has_not_landed() {
     let text = boot_tail(&[], Some("doing now: the parser"), None, size);
     assert_eq!(with_unlanded(text.clone(), None), text);
 }
+
+/// Everything unfinished goes in the ledger before the note, and the first message is compared
+/// with the open items (hand-off 2 of 825c4fad: "not ledgered as opens").
+#[test]
+fn the_nudge_asks_for_opens_before_the_note_and_the_first_message_check() {
+    let text = nudge(Path::new("/tmp/record/handoff/1.md"));
+    let opens = text.find("Everything unfinished").unwrap();
+    let brief = text.find("`brigadier context brief`").unwrap();
+    let note = text.find("Then write the hand-off note").unwrap();
+    assert!(opens < note && brief < note, "{text}");
+    assert!(text.contains("a thing to tell the user"), "{text}");
+}
