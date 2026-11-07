@@ -9,7 +9,7 @@
 import { BrowserWindow, webContents, WebContentsView, type IpcMainInvokeEvent, type WebContents } from "electron";
 
 import { handleFromApp } from "./appPage";
-import { beforeDevTools } from "./browserAgent";
+import { beforeDevTools, devToolsEnded, devToolsOpen } from "./browserAgent";
 import { agentScriptBody, sweptAndScrubbed } from "./browserAgentSecrets";
 
 /** The session of DevTools' front ends, in memory: it isn't a profile and holds nothing of one. */
@@ -55,20 +55,21 @@ async function openDevTools(sender: WebContents, guest: WebContents, bounds: Bou
   placeFront(guest.id, bounds);
   window.contentView.addChildView(view);
   await beforeDevTools(guest);
-  guest.once("devtools-closed", () => dropFront(guest.id));
+  view.webContents.once("destroyed", () => devToolsEnded(guest));
   guest.once("destroyed", () => dropFront(guest.id));
   guest.setDevToolsWebContents(view.webContents);
   guest.openDevTools({ mode: "detach", activate: false });
 }
 
-type Device = { width: number; height: number; pixelRatio: number; mobile: boolean; userAgent: string | null; scale: number };
+type Device = { width: number; height: number; pixelRatio: number; userAgent: string | null; scale: number };
 
 /** What each emulated tab was told, and its own user agent to go back to. */
 const devices = new Map<number, { device: Device; ownAgent: string }>();
 
 function applyDevice(guest: WebContents, device: Device): void {
   guest.enableDeviceEmulation({
-    screenPosition: device.mobile ? "mobile" : "desktop",
+    // Not "mobile", also for a phone: that lays a page out 980 wide, ignoring its width=device-width (seen on 393 and 768).
+    screenPosition: "desktop",
     screenSize: { width: device.width, height: device.height },
     viewPosition: { x: 0, y: 0 },
     deviceScaleFactor: device.pixelRatio,
@@ -117,7 +118,8 @@ const picking = new Map<number, () => void>();
 
 /** Waits for the user's click on an element of the page, with the highlight Chromium draws; null when they leave. */
 function pick(guest: WebContents): Promise<unknown> {
-  if (guest.isDevToolsOpened()) return Promise.reject(new Error("devtools_open"));
+  // L128: the picker needs the debugger and never closes DevTools. An opening one counts already.
+  if (devToolsOpen(guest) || fronts.has(guest.id)) return Promise.reject(new Error("devtools_open"));
   if (picking.has(guest.id)) return Promise.reject(new Error("Already picking on this page."));
   const { debugger: protocol } = guest;
   protocol.attach("1.3");
@@ -134,7 +136,7 @@ function pick(guest: WebContents): Promise<unknown> {
       if (method !== "Overlay.inspectNodeRequested" || params.backendNodeId === undefined) return;
       describe(guest, params.backendNodeId).then((picked) => finish(() => resolve(picked)), (error) => finish(() => reject(error)));
     };
-    const onDetach = () => finish(() => (guest.isDevToolsOpened() ? reject(new Error("devtools_open")) : resolve(null)));
+    const onDetach = () => finish(() => (devToolsOpen(guest) ? reject(new Error("devtools_open")) : resolve(null)));
     const onKey = (event: Electron.Event, input: Electron.Input) => {
       if (input.type !== "keyDown" || input.key !== "Escape") return;
       event.preventDefault();
@@ -179,6 +181,7 @@ export function installBrowserDevtools(): void {
         return null;
       case "close":
         guest.closeDevTools();
+        dropFront(guest.id);
         return null;
       case "device":
         return setDevice(guest, args.device as Device);

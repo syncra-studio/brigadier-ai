@@ -18,7 +18,6 @@ export type DeviceSize = {
   width: number;
   height: number;
   pixelRatio: number;
-  mobile: boolean;
   userAgent: string | null;
 };
 
@@ -34,15 +33,15 @@ const PIXEL = `Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTM
 
 /** The sizes offered, a named device each; the width and height fields take any other. */
 export const DEVICE_SIZES: readonly DeviceSize[] = [
-  { name: "iPhone SE", width: 375, height: 667, pixelRatio: 2, mobile: true, userAgent: IPHONE },
-  { name: "iPhone 16", width: 393, height: 852, pixelRatio: 3, mobile: true, userAgent: IPHONE },
-  { name: "iPhone 16 Pro Max", width: 440, height: 956, pixelRatio: 3, mobile: true, userAgent: IPHONE },
-  { name: "Pixel 9", width: 412, height: 923, pixelRatio: 2.625, mobile: true, userAgent: PIXEL },
-  { name: "iPad Mini", width: 768, height: 1024, pixelRatio: 2, mobile: true, userAgent: IPAD },
-  { name: "iPad Pro 12.9\"", width: 1024, height: 1366, pixelRatio: 2, mobile: true, userAgent: IPAD },
-  { name: "Laptop", width: 1366, height: 768, pixelRatio: 1, mobile: false, userAgent: null },
-  { name: "Laptop, large", width: 1440, height: 900, pixelRatio: 2, mobile: false, userAgent: null },
-  { name: "Desktop", width: 1920, height: 1080, pixelRatio: 1, mobile: false, userAgent: null },
+  { name: "iPhone SE", width: 375, height: 667, pixelRatio: 2, userAgent: IPHONE },
+  { name: "iPhone 16", width: 393, height: 852, pixelRatio: 3, userAgent: IPHONE },
+  { name: "iPhone 16 Pro Max", width: 440, height: 956, pixelRatio: 3, userAgent: IPHONE },
+  { name: "Pixel 9", width: 412, height: 923, pixelRatio: 2.625, userAgent: PIXEL },
+  { name: "iPad Mini", width: 768, height: 1024, pixelRatio: 2, userAgent: IPAD },
+  { name: "iPad Pro 12.9\"", width: 1024, height: 1366, pixelRatio: 2, userAgent: IPAD },
+  { name: "Laptop", width: 1366, height: 768, pixelRatio: 1, userAgent: null },
+  { name: "Laptop, large", width: 1440, height: 900, pixelRatio: 2, userAgent: null },
+  { name: "Desktop", width: 1920, height: 1080, pixelRatio: 1, userAgent: null },
 ];
 
 export const CUSTOM_SIZE = "Custom";
