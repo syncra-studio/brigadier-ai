@@ -150,15 +150,6 @@ jobs:
           test ! -e "$uninstaller"
           test -f "$data/uninstall-check.txt"
           echo "the install folder is gone and the data stayed"
-      - name: Linux AppImage, with the OS's sandbox rules as they are
-        # Can't be setuid, and Ubuntu 24.04 restricts user namespaces: what it does is reported, not decided here.
-        if: runner.os == 'Linux'
-        continue-on-error: true
-        run: |
-          appimage="$(ls "${CARGO_TARGET_DIR:-target}/electron-dist/${{ matrix.arch }}"/*.AppImage | head -n 1)"
-          chmod +x "$appimage"
-          BRIGADIER_SMOKE_REPORT="$RUNNER_TEMP/appimage-smoke.json" timeout 180 dbus-run-session -- xvfb-run -a "$appimage" --smoke 2>&1 | tail -n 15
-          test -s "$RUNNER_TEMP/appimage-smoke.json"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -169,7 +160,7 @@ jobs:
         if: always()
         run: |
           mkdir -p "$RUNNER_TEMP/downloads"
-          find "${CARGO_TARGET_DIR:-target}/electron-dist/${{ matrix.arch }}" -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' \) -exec mv {} "$RUNNER_TEMP/downloads/" \;
+          find "${CARGO_TARGET_DIR:-target}/electron-dist/${{ matrix.arch }}" -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.deb' \) -exec mv {} "$RUNNER_TEMP/downloads/" \;
       - uses: actions/upload-artifact@v7
         if: always()
         with:

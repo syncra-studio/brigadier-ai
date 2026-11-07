@@ -93,7 +93,8 @@ module.exports = {
   linux: {
     executableName: "brigadier-app",
     icon: "src-tauri/icons",
-    target: ["deb", "AppImage"],
+    // No AppImage: its launcher passes --no-sandbox, which the app refuses.
+    target: ["deb"],
     category: "Development",
     maintainer: "Brigadier <noreply@brigadier.invalid>",
     extraFiles: [

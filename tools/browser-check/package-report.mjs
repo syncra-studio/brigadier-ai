@@ -14,7 +14,7 @@ const size = (file) => {
   return stat.isDirectory() ? fs.readdirSync(file).reduce((sum, name) => sum + size(path.join(file, name)), 0) : stat.size;
 };
 const rows = [];
-for (const name of fs.readdirSync(dist)) if (/\.(dmg|zip|exe|deb|AppImage)$/.test(name)) rows.push([`Download: ${name}`, mb(size(path.join(dist, name)))]);
+for (const name of fs.readdirSync(dist)) if (/\.(dmg|zip|exe|deb)$/.test(name)) rows.push([`Download: ${name}`, mb(size(path.join(dist, name)))]);
 const folder = fs.readdirSync(dist).find((name) => /^(mac|win|linux)(-arm64)?(-unpacked)?$/.test(name));
 const root = path.join(dist, folder);
 const app = process.platform === "darwin" ? path.join(root, "Brigadier.app") : root;
