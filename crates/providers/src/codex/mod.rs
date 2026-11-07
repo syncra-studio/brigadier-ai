@@ -1422,7 +1422,14 @@ impl Provider for Codex {
                 .filter(|server| server.trusted)
                 .map(|server| server.name.clone())
                 .collect();
-            tokio::spawn(read_loop(rpc.clone(), stdout, shared.clone(), trusted));
+            let resumed = matches!(spec.origin, Origin::Resume { .. });
+            tokio::spawn(read_loop(
+                rpc.clone(),
+                stdout,
+                shared.clone(),
+                trusted,
+                resumed,
+            ));
 
             let started = tokio::time::timeout(
                 START_TIMEOUT,
@@ -3516,8 +3523,10 @@ async fn read_loop(
     mut stdout: process::Lines,
     shared: Arc<Shared>,
     trusted: HashSet<String>,
+    resumed: bool,
 ) {
     let mut parser = Parser::live().with_private_logs(rpc.process.private_logs());
+    parser.resumed_before_turn = resumed;
     parser.own_mcp = shared.own_mcp.clone();
     while let Some(line) = stdout.recv().await {
         if shared.compact_asked.swap(false, Ordering::AcqRel) {
@@ -5386,6 +5395,7 @@ for line in sys.stdin:
             stdout,
             shared.clone(),
             HashSet::new(),
+            false,
         ));
         let session = CodexSession {
             context_window: None,
@@ -5503,6 +5513,7 @@ for line in sys.stdin:
             stdout,
             shared.clone(),
             HashSet::new(),
+            false,
         ));
         let mut session = CodexSession {
             context_window: None,
@@ -5759,6 +5770,7 @@ for line in sys.stdin:
             stdout,
             shared.clone(),
             HashSet::new(),
+            false,
         ));
         let session = CodexSession {
             context_window: None,

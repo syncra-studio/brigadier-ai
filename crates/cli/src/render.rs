@@ -94,7 +94,7 @@ pub fn sessions(output: &SessionsOutput) -> String {
     out
 }
 
-/// How full a worker's context is: "120k of 1M", "120k" without a known window, "-" unknown.
+/// How full a worker's context is: "120k of 200k" (its compaction point), "120k" without one, "-" unknown.
 fn context(context: Option<crate::protocol::ContextSize>) -> String {
     fn tokens(n: i64) -> String {
         if n >= 1_000_000 && n % 1_000_000 == 0 {

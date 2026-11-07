@@ -239,7 +239,22 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
                 .any(|task| task.state == crate::work::TaskState::Reported)
         })
         .await;
-        // The report's turn too, so `read other` below sees the session's last answer.
+        // The report's turn too, so `read other` below sees the session's last answer. Reported
+        // comes before the wake that starts it, so idle alone can return in that gap.
+        let core = flow.core.clone();
+        super::eventually_async("the report's turn answered", || {
+            let (core, session) = (core.clone(), session.clone());
+            async move {
+                core.list_messages(session, None, 50)
+                    .await
+                    .unwrap()
+                    .messages
+                    .into_iter()
+                    .rfind(|message| message.role == crate::model::MessageRole::Assistant)
+                    .is_some_and(|message| message.text == "Noted.")
+            }
+        })
+        .await;
         flow.idle_in(session).await;
     }
     answers
@@ -329,7 +344,7 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
     // How full its context is, as its CLI said, for the parent to weigh reusing it (run2-D42).
     assert_eq!(
         rows[0]["context"],
-        json!({"usedTokens": 42_000, "windowTokens": 1_000_000})
+        json!({"usedTokens": 42_000, "windowTokens": 200_000})
     );
 
     // A worker calls as itself: it sees the sidebar sessions, none as its own, and has no

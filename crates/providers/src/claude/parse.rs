@@ -99,6 +99,11 @@ pub struct Parser {
     /// The context size last reported, to repeat once the window is known.
     context_used: Option<i64>,
     totals: TokenUsage,
+    /// The cumulative `modelUsage` at the last result; it goes on across a resume, so none until
+    /// this process's first result.
+    model_totals: Option<TokenUsage>,
+    /// A compaction ended since the last result: `usage` leaves its calls out, `modelUsage` has them.
+    compaction_unreported: bool,
     /// Subagents' (the Agent tool's) messages since the last result, each one's last usage by
     /// message id. Claude's `result` leaves them out of its `usage` (only its cumulative
     /// `modelUsage` has them), so the next result's turn adds them.
@@ -970,6 +975,7 @@ impl Parser {
                     .unwrap_or_else(|| str_of(metadata, "trigger") == Some("auto"));
                 let tokens_after = metadata.get("post_tokens").and_then(Value::as_i64);
                 self.compacted = true;
+                self.compaction_unreported = true;
                 out.push(Output::Event(ProviderEvent::CompactionEnded {
                     automatic,
                     tokens_before: metadata.get("pre_tokens").and_then(Value::as_i64),
@@ -1254,6 +1260,10 @@ impl Parser {
             }
         }
         let calls = i64::try_from(std::mem::take(&mut self.turn_calls).len()).unwrap_or(i64::MAX);
+        let model_totals = value.get("modelUsage").map(model_usage_sum);
+        let carried = model_totals.clone().or_else(|| self.model_totals.clone());
+        let before = std::mem::replace(&mut self.model_totals, carried);
+        let compaction = std::mem::take(&mut self.compaction_unreported);
         let usage = value.get("usage").map(|usage| {
             let mut turn = token_usage(usage);
             turn.cost_usd = value.get("total_cost_usd").and_then(Value::as_f64);
@@ -1267,6 +1277,23 @@ impl Parser {
                 turn.cache_write_1h_tokens += sub.cache_write_1h_tokens;
                 turn.cache_write_5m_tokens += sub.cache_write_5m_tokens;
                 self.subagent_counted.insert(id);
+            }
+            // What this turn's calls don't explain of the cumulative total: its compaction's.
+            if compaction && let (Some(before), Some(now)) = (&before, &model_totals) {
+                let rest = |now: i64, before: i64, turn: i64| (now - before - turn).max(0);
+                turn.input_tokens += rest(now.input_tokens, before.input_tokens, turn.input_tokens);
+                turn.cached_input_tokens += rest(
+                    now.cached_input_tokens,
+                    before.cached_input_tokens,
+                    turn.cached_input_tokens,
+                );
+                turn.cache_write_tokens += rest(
+                    now.cache_write_tokens,
+                    before.cache_write_tokens,
+                    turn.cache_write_tokens,
+                );
+                turn.output_tokens +=
+                    rest(now.output_tokens, before.output_tokens, turn.output_tokens);
             }
             turn
         });
@@ -1860,6 +1887,23 @@ fn exit_header(output: &str) -> Option<(i32, &str)> {
     let (first, rest) = output.split_once('\n').unwrap_or((output, ""));
     let code = first.strip_prefix("Exit code ")?.trim().parse().ok()?;
     Some((code, rest))
+}
+
+/// The tokens of a result's cumulative `modelUsage`, over all its models.
+fn model_usage_sum(models: &Value) -> TokenUsage {
+    let mut sum = TokenUsage::default();
+    for model in models
+        .as_object()
+        .into_iter()
+        .flat_map(|models| models.values())
+    {
+        let int = |key: &str| model.get(key).and_then(Value::as_i64).unwrap_or_default();
+        sum.input_tokens += int("inputTokens");
+        sum.cached_input_tokens += int("cacheReadInputTokens");
+        sum.cache_write_tokens += int("cacheCreationInputTokens");
+        sum.output_tokens += int("outputTokens");
+    }
+    sum
 }
 
 fn token_usage(usage: &Value) -> TokenUsage {
@@ -4168,6 +4212,73 @@ mod tests {
             answered_input(json!({"questions": []}), &[question], &[vec!["  ".into()]]),
             json!({"questions": [], "answers": {}})
         );
+    }
+
+    /// Taken from a real `/compact`: its result's `usage` is all zeros while the cumulative
+    /// `modelUsage` grows by the compaction's calls, and the next turn counts as itself.
+    #[test]
+    fn a_compactions_calls_count_from_the_cumulative_model_usage() {
+        let mut parser = Parser::default();
+        let result = |usage: (i64, i64, i64, i64), total: (i64, i64, i64, i64)| {
+            json!({ "type": "result", "subtype": "success", "is_error": false,
+                "usage": { "input_tokens": usage.0, "output_tokens": usage.1,
+                           "cache_read_input_tokens": usage.2,
+                           "cache_creation_input_tokens": usage.3 },
+                "modelUsage": { "m": { "inputTokens": total.0, "outputTokens": total.1,
+                                       "cacheReadInputTokens": total.2,
+                                       "cacheCreationInputTokens": total.3 } } })
+            .to_string()
+        };
+        let total = |outputs: Vec<Output>| {
+            outputs
+                .into_iter()
+                .find_map(|output| match output {
+                    Output::Event(ProviderEvent::Usage { total, .. }) => Some((
+                        total.input_tokens,
+                        total.output_tokens,
+                        total.cached_input_tokens,
+                        total.cache_write_tokens,
+                    )),
+                    _ => None,
+                })
+                .expect("a usage report")
+        };
+        let boundary = json!({ "type": "system", "subtype": "compact_boundary",
+            "compact_metadata": { "trigger": "manual", "pre_tokens": 33_968,
+                                  "post_tokens": 8_730 } })
+        .to_string();
+        let first = result((2, 79, 0, 31_989), (2, 79, 0, 31_989));
+        assert_eq!(total(parser.feed(&first)), (2, 79, 0, 31_989));
+        let second = result((2, 79, 20_853, 13_034), (4, 158, 20_853, 45_023));
+        assert_eq!(total(parser.feed(&second)), (4, 158, 20_853, 45_023));
+        parser.feed(&boundary);
+        let compacted = result((0, 0, 0, 0), (7_744, 696, 73_773, 56_237));
+        assert_eq!(total(parser.feed(&compacted)), (7_744, 696, 73_773, 56_237));
+        let after = result((2, 164, 20_335, 13_930), (7_746, 860, 94_108, 70_167));
+        assert_eq!(total(parser.feed(&after)), (7_746, 860, 94_108, 70_167));
+    }
+
+    /// `modelUsage` goes on across a resume: a compaction in the process's first turn has no
+    /// total to count from, and the whole session is not counted again for it.
+    #[test]
+    fn a_resumed_sessions_earlier_total_is_not_counted_as_a_compaction() {
+        let mut parser = Parser::default();
+        parser.feed(
+            &json!({ "type": "system", "subtype": "compact_boundary",
+                "compact_metadata": { "trigger": "auto", "post_tokens": 3_000 } })
+            .to_string(),
+        );
+        let outputs = parser.feed(
+            &json!({ "type": "result", "subtype": "success", "is_error": false,
+                "usage": { "input_tokens": 1, "output_tokens": 1 },
+                "modelUsage": { "m": { "inputTokens": 900_000, "outputTokens": 9_000 } } })
+            .to_string(),
+        );
+        let input = outputs.into_iter().find_map(|output| match output {
+            Output::Event(ProviderEvent::Usage { total, .. }) => Some(total.input_tokens),
+            _ => None,
+        });
+        assert_eq!(input, Some(1));
     }
 
     /// Opus 5.5 can write its reply as a second thinking block (recorded from Claude Code

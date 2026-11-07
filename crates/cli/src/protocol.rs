@@ -1037,7 +1037,8 @@ pub enum EventKind {
     Gone,
     /// Its model hit a usage limit.
     UsageLimit,
-    /// Its CLI compacted its context.
+    /// It handed off to a fresh CLI session. It wakes nobody: its session hears it with the next
+    /// event that does. A compaction says nothing.
     FreshContext,
     /// Its CLI said nothing for 20 minutes while it worked.
     Quiet,

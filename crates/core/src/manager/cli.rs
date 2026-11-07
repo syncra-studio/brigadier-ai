@@ -694,7 +694,7 @@ impl SessionManager {
                 continue;
             }
             workers.push(WorkerRow {
-                context: self.worker_context(&task),
+                context: self.row_context(&task),
                 ..self.cli_worker_row(&task, &diffs).await
             });
         }
@@ -706,6 +706,16 @@ impl SessionManager {
         })
     }
 
+    /// Worker `task`'s context as its row shows it: against the point it compacts at (S26), not
+    /// its model's window.
+    fn row_context(&self, task: &Task) -> Option<brigadier_cli::protocol::ContextSize> {
+        self.worker_context(task)
+            .map(|size| brigadier_cli::protocol::ContextSize {
+                used_tokens: size.used_tokens,
+                window_tokens: Some(self.seam_config().threshold(size.window_tokens, None)),
+            })
+    }
+
     /// Worker `task` as `brigadier workers` shows it now, for the reply of an action on it (D156).
     pub(super) async fn worker_now(&self, task: &Task) -> Option<WorkerRow> {
         let task = self
@@ -714,7 +724,7 @@ impl SessionManager {
             .ok()?;
         let diffs = self.cli_worker_changes(&task.conversation_id).await;
         Some(WorkerRow {
-            context: self.worker_context(&task),
+            context: self.row_context(&task),
             ..self.cli_worker_row(&task, &diffs).await
         })
     }

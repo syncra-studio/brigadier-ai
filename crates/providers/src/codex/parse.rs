@@ -114,6 +114,9 @@ pub struct Parser {
     /// process started.
     reported_tokens: i64,
     model_calls: i64,
+    /// It resumed a thread and no turn has started: a report now repeats the thread's last
+    /// request, already counted when it ran.
+    pub(super) resumed_before_turn: bool,
     /// The last model request's prompt (input, cached included), in this process (research
     /// P0.1).
     last_prompt: Option<i64>,
@@ -286,6 +289,7 @@ impl Parser {
                 }
             }
             "turn/started" => {
+                self.resumed_before_turn = false;
                 let Some(started) =
                     decode::<p::TurnStartedNotification>(method, params, out, self.private_logs)
                 else {
@@ -403,8 +407,11 @@ impl Parser {
                 };
                 let usage = update.token_usage;
                 // One report per model request: a total that grew is one more call.
+                let repeated = self.resumed_before_turn;
                 let mut calls = Vec::new();
-                if usage.total.total_tokens > self.reported_tokens {
+                if repeated {
+                    self.last_prompt = Some(usage.last.input_tokens);
+                } else if usage.total.total_tokens > self.reported_tokens {
                     self.model_calls += 1;
                     let prompt = usage.last.input_tokens;
                     calls.push(CallCache {
@@ -417,17 +424,19 @@ impl Parser {
                     });
                 }
                 self.reported_tokens = usage.total.total_tokens;
-                out.push(Output::Event(ProviderEvent::Usage {
-                    total: TokenUsage {
-                        model_calls: self.model_calls,
-                        ..token_usage(&usage.total)
-                    },
-                    last: Some(TokenUsage {
-                        model_calls: 1,
-                        ..token_usage(&usage.last)
-                    }),
-                    calls,
-                }));
+                if !repeated {
+                    out.push(Output::Event(ProviderEvent::Usage {
+                        total: TokenUsage {
+                            model_calls: self.model_calls,
+                            ..token_usage(&usage.total)
+                        },
+                        last: Some(TokenUsage {
+                            model_calls: 1,
+                            ..token_usage(&usage.last)
+                        }),
+                        calls,
+                    }));
+                }
                 // The last request is what the model saw: the context in use. (What a
                 // compaction left counts only in its total.)
                 let used = usage.last.total_tokens;
@@ -2774,6 +2783,43 @@ mod tests {
         assert_eq!(calls(events(&mut parser, &report(250, 150))), (2, Some(1)));
         // The same total again is no new request.
         assert_eq!(calls(events(&mut parser, &report(250, 150))).0, 2);
+    }
+
+    /// A resumed thread's report before its first turn repeats its last request: only the size
+    /// of the context comes of it, and the turn's own report counts.
+    #[test]
+    fn a_resumes_repeated_report_is_not_counted_again() {
+        let mut parser = Parser::live();
+        parser.resumed_before_turn = true;
+        let breakdown = |total: i64| {
+            json!({ "cachedInputTokens": 0, "inputTokens": total, "outputTokens": 0,
+                    "reasoningOutputTokens": 0, "totalTokens": total })
+        };
+        let report = |total: i64, last: i64| {
+            json!({ "method": "thread/tokenUsage/updated", "params": { "threadId": "t1",
+                "turnId": "old", "tokenUsage": { "total": breakdown(total), "last": breakdown(last) } } })
+        };
+        let usage = |events: &[ProviderEvent]| {
+            events.iter().find_map(|event| match event {
+                ProviderEvent::Usage { total, .. } => Some(total.model_calls),
+                _ => None,
+            })
+        };
+        let repeated = events(&mut parser, &report(100, 100));
+        assert_eq!(usage(&repeated), None);
+        assert!(repeated.iter().any(|event| matches!(
+            event,
+            ProviderEvent::ContextSize {
+                used_tokens: 100,
+                ..
+            }
+        )));
+        events(
+            &mut parser,
+            &json!({ "method": "turn/started", "params": { "threadId": "t1",
+                "turn": { "id": "new", "items": [], "status": "inProgress" } } }),
+        );
+        assert_eq!(usage(&events(&mut parser, &report(250, 150))), Some(1));
     }
 
     /// BUILD-PLAN B0: each request's prompt (its input, cached included) is kept against the

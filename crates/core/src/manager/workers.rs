@@ -2059,6 +2059,12 @@ impl SessionManager {
                     worktree.as_deref(),
                 )
             });
+        // Its own hand-off note goes at every level: nobody is there to be asked mid-hand-off.
+        let raised = raised
+            || self
+                .task_by_id(&live.conversation_id, &live.id)
+                .await
+                .is_ok_and(|task| seam::own_note_request(&self.worker_record(&task), &request));
         if !raised && !self.allowed_before(&live.conversation_id, &mut request, worktree.as_deref())
         {
             // Its CLI's own subagents' too (D166).
