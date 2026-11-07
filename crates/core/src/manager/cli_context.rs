@@ -279,7 +279,7 @@ impl SessionManager {
         }
         let tokens = self.context_tokens(&whose.conversation).await?;
         text.push_str(&format!(
-            "\n## tokens: Used by this session and its workers, from each turn's report (31 days kept)\n{}",
+            "\n## tokens: Used by this session and its workers, from each turn's report (31 days kept; Codex compaction calls not counted)\n{}",
             brigadier_cli::render::tokens(&tokens)
         ));
         for (part, body) in &inline {

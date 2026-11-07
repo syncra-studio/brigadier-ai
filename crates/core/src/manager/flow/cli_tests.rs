@@ -329,7 +329,7 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
     // How full its context is, as its CLI said, for the parent to weigh reusing it (run2-D42).
     assert_eq!(
         rows[0]["context"],
-        json!({"usedTokens": 42_000, "windowTokens": 1_000_000})
+        json!({"usedTokens": 42_000, "windowTokens": 200_000})
     );
 
     // A worker calls as itself: it sees the sidebar sessions, none as its own, and has no
