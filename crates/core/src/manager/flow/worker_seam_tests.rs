@@ -204,6 +204,15 @@ fn script(seen: Arc<Seen>) -> Script {
                     native_id: None,
                 })
                 .await;
+                // Its note request is steered into this turn, which reads it before it ends, as
+                // both CLIs do: Claude holds a late one's turn open, Codex refuses it.
+                if let Some(nudge) = turn.steered().await {
+                    std::fs::write(note_of(&nudge), "Doing now: swelling.\nNext: go on.").unwrap();
+                    seen.worker
+                        .lock()
+                        .unwrap()
+                        .push((turn.native_id.clone(), nudge));
+                }
                 return Reply::text("Swollen.");
             }
             if said.contains("Overflow.") {
