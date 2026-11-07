@@ -109,11 +109,12 @@ export function BrowserPage() {
     return <BrowserSiteSettings profile={profileId} onBack={() => (profileId ? void openProfileDetail(profileId) : setView("page"))} />;
   }
   const backFromData = () => (profileId ? void openProfileDetail(profileId) : setView("page"));
-  if (on && embedded && view === "downloads") return <BrowserDownloads profile={profileId} onBack={backFromData} />;
+  if (on && embedded && view === "downloads") return <BrowserDownloads key={profileId ?? ""} profile={profileId} onBack={backFromData} />;
   if (on && embedded && view === "history") {
     return (
       <>
         <BrowserHistory
+          key={profileId ?? ""}
           profile={profileId}
           onBack={backFromData}
           onClear={(profile) => {
