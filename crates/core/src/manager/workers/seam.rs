@@ -28,7 +28,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use brigadier_providers::{ErrorKind, InputPart, Origin, ProviderError, TurnInput, TurnStatus};
+use brigadier_providers::{ApprovalKind, ApprovalRequest, ErrorKind, InputPart, Origin, ProviderError, TurnInput, TurnStatus};
 
 use super::once::{mark_in, marked_once, once_mark, without_mark};
 use super::{TaskLive, TaskLiveState, explicitly_paused};
@@ -511,6 +511,7 @@ impl SessionManager {
         let mut state = live.state.lock().await;
         if done {
             save_held(&record, &state.seam_held).await;
+            self.worker_handed_off(&task.conversation_id, &task.id, n);
         } else {
             state.seam_held = waited;
         }
@@ -988,5 +989,115 @@ pub(super) fn name_successor(
         if let Err(err) = write_seam(record, &file) {
             tracing::warn!(error = %err, "could not record the worker's successor");
         }
+    }
+}
+
+/// Whether a CLI's request only writes this worker's own hand-off note (`handoff/<n>.md` in its
+/// `record`) or makes that folder: it goes at every permission level, unasked.
+pub(super) fn own_note_request(record: &Path, request: &ApprovalRequest) -> bool {
+    let handoff = record.join("handoff");
+    match request.kind {
+        ApprovalKind::FileChange => {
+            !request.paths.is_empty()
+                && request.paths.iter().all(|path| is_note_of(&handoff, Path::new(path)))
+        }
+        ApprovalKind::Command => request
+            .command
+            .as_deref()
+            .is_some_and(|command| makes_folder(&handoff, command)),
+        ApprovalKind::Tool | ApprovalKind::Permissions => false,
+    }
+}
+
+/// `path` is `<digits>.md` directly in `handoff`, however the path to it is written (macOS's
+/// `/tmp` is `/private/tmp`), and no link.
+fn is_note_of(handoff: &Path, path: &Path) -> bool {
+    let named = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".md"))
+        .is_some_and(|stem| !stem.is_empty() && stem.bytes().all(|byte| byte.is_ascii_digit()));
+    let same_folder = match (path.parent().map(Path::canonicalize), handoff.canonicalize()) {
+        (Some(Ok(parent)), Ok(folder)) => parent == folder,
+        _ => false,
+    };
+    named
+        && same_folder
+        && !std::fs::symlink_metadata(path).is_ok_and(|file| file.file_type().is_symlink())
+}
+
+/// `command` is exactly `mkdir -p <handoff>`, bare or as Codex wraps it in a shell.
+fn makes_folder(handoff: &Path, command: &str) -> bool {
+    let bare = ["/bin/zsh -c ", "/bin/bash -c ", "/bin/sh -c "]
+        .iter()
+        .find_map(|shell| command.strip_prefix(shell))
+        .map_or(command, |quoted| quoted.trim_matches(|c| c == '\'' || c == '"'));
+    let Some(folder) = bare.strip_prefix("mkdir -p ") else {
+        return false;
+    };
+    let folder = Path::new(folder.trim_matches(|c| c == '\'' || c == '"'));
+    folder.is_absolute()
+        && matches!(
+            (folder.canonicalize(), handoff.canonicalize()),
+            (Ok(asked), Ok(own)) if asked == own
+        )
+}
+
+#[cfg(test)]
+mod note_request_tests {
+    use super::*;
+
+    fn asks(kind: ApprovalKind, paths: &[&Path], command: Option<&str>) -> ApprovalRequest {
+        serde_json::from_value(serde_json::json!({
+            "id": "r", "kind": match kind {
+                ApprovalKind::Command => "command",
+                ApprovalKind::FileChange => "fileChange",
+                ApprovalKind::Tool => "tool",
+                ApprovalKind::Permissions => "permissions",
+            },
+            "tool": "t", "command": command, "cwd": null,
+            "paths": paths.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
+            "reason": null, "escalation": false, "input": null,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn only_a_workers_own_note_goes_unasked() {
+        let root = std::env::temp_dir().join(format!("note-{}", uuid::Uuid::new_v4()));
+        let record = root.join("record");
+        let handoff = record.join("handoff");
+        std::fs::create_dir_all(&handoff).unwrap();
+        std::fs::write(root.join("secret.md"), "").unwrap();
+        let write = |path: &Path| own_note_request(&record, &asks(ApprovalKind::FileChange, &[path], None));
+        assert!(write(&handoff.join("1.md")));
+        assert!(write(&handoff.join("12.md")));
+        // Elsewhere, another name, or out of the folder by its path.
+        assert!(!write(&handoff.join("1-start.md")));
+        assert!(!write(&handoff.join("notes.txt")));
+        assert!(!write(&record.join("1.md")));
+        assert!(!write(&handoff.join("../../1.md")));
+        assert!(!write(Path::new("handoff/1.md")));
+        // A link in the folder is not its note.
+        #[cfg(unix)]
+        {
+            let link = handoff.join("2.md");
+            std::os::unix::fs::symlink(root.join("secret.md"), &link).unwrap();
+            assert!(!write(&link));
+        }
+        // With another file, it asks.
+        assert!(!own_note_request(
+            &record,
+            &asks(ApprovalKind::FileChange, &[&handoff.join("1.md"), &root.join("secret.md")], None),
+        ));
+        let run = |command: &str| own_note_request(&record, &asks(ApprovalKind::Command, &[], Some(command)));
+        let folder = handoff.display();
+        assert!(run(&format!("mkdir -p {folder}")));
+        assert!(run(&format!("/bin/zsh -c 'mkdir -p {folder}'")));
+        assert!(!run(&format!("mkdir -p {folder}; rm -rf /")));
+        assert!(!run(&format!("/bin/zsh -c 'mkdir -p {folder} && curl x'")));
+        assert!(!run("mkdir -p /tmp"));
+        assert!(!own_note_request(&record, &asks(ApprovalKind::Tool, &[&handoff.join("1.md")], None)));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

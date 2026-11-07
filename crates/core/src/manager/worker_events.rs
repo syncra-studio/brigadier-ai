@@ -10,6 +10,8 @@
 //!   with its parent's CLI before it could say so.
 //! - The net's hold is done once the parent's CLI took the turn that carries it. After a
 //!   restart it is done when the parent's CLI session file holds the message, else freed.
+//! - A hand-off wakes nobody (L24): it stays pending until the next event that does, and goes
+//!   out with it as one line ([`rides_along`]).
 //! - The file only grows by a line per change, and is read back once per daemon, then written
 //!   again without what was done.
 
@@ -169,6 +171,12 @@ impl Fold {
         }
         fold
     }
+}
+
+/// Whether an event wakes nobody by itself and goes out with the next one that does: a worker's
+/// hand-off. Its turn's end always follows, so it is always heard.
+fn rides_along(kept: &Kept) -> bool {
+    kept.event.event == EventKind::FreshContext
 }
 
 /// One parent's events.
@@ -446,6 +454,36 @@ impl WorkerEvents {
         held
     }
 
+    /// [`Self::hold`] for what wakes its parent: nothing unless an event that wakes it is
+    /// picked, then with what [`rides_along`], oldest first.
+    pub(crate) fn hold_wake(
+        &self,
+        conversation: &ConversationId,
+        record: &Path,
+        by: &Holder,
+        wanted: impl Fn(&Kept) -> bool,
+        stale: impl Fn(&Kept) -> bool,
+    ) -> Vec<Kept> {
+        let mut held = self.hold(
+            conversation,
+            record,
+            by,
+            |kept| !rides_along(kept) && wanted(kept),
+            stale,
+        );
+        if !held.is_empty() {
+            held.extend(self.hold(
+                conversation,
+                record,
+                by,
+                |kept| rides_along(kept) && wanted(kept),
+                |_| false,
+            ));
+            held.sort_by_key(|kept| kept.event.at_ms);
+        }
+        held
+    }
+
     /// What `by` holds of `conversation`'s was heard: done.
     pub(crate) fn done(&self, conversation: &ConversationId, record: &Path, by: &Holder) {
         let parent = self.parent(conversation, record);
@@ -706,7 +744,7 @@ fn net_word(kind: EventKind) -> &'static str {
         EventKind::Interrupted => "stopped",
         EventKind::Gone => "ended",
         EventKind::UsageLimit => "hit a usage limit",
-        EventKind::FreshContext => "compacted its context",
+        EventKind::FreshContext => "started fresh",
         EventKind::Quiet => "is quiet",
         EventKind::Stalled => "has a stalled command",
         EventKind::Starved => "has a starved build",
@@ -815,6 +853,16 @@ impl SessionManager {
         }
     }
 
+    /// Worker `task` of `conversation` handed off: its session hears on its next wake, with no
+    /// turn for this (L24). `n`: which hand-off.
+    pub(super) fn worker_handed_off(&self, conversation: &ConversationId, task: &TaskId, n: u32) {
+        let mut event = super::plain_workers::event(task, EventKind::FreshContext);
+        event.message = Some(format!("hand-off {n}, its next CLI carries on"));
+        let record = self.events_record(conversation);
+        self.worker_events
+            .push(conversation, &record, task, None, event);
+    }
+
     /// Holds `conversation`'s events for a `brigadier wait` of its workers `tasks` (all of
     /// them when empty), oldest first.
     pub(super) async fn hold_for_wait(
@@ -827,7 +875,7 @@ impl SessionManager {
         let record = self.events_record(conversation);
         Ok(self
             .worker_events
-            .hold(
+            .hold_wake(
                 conversation,
                 &record,
                 holder,
@@ -929,7 +977,11 @@ impl SessionManager {
             .worker_events
             .kept(id, &record)
             .iter()
-            .any(|kept| kept.held.is_none() && now.saturating_sub(kept.event.at_ms) >= after);
+            .any(|kept| {
+                kept.held.is_none()
+                    && !rides_along(kept)
+                    && now.saturating_sub(kept.event.at_ms) >= after
+            });
         if !due {
             return;
         }
@@ -938,7 +990,7 @@ impl SessionManager {
         };
         let message = new_net_id();
         let holder = Holder::Net(message.clone());
-        let held = self.worker_events.hold(
+        let held = self.worker_events.hold_wake(
             id,
             &record,
             &holder,
@@ -1296,6 +1348,45 @@ mod tests {
         let again = WorkerEvents::default();
         again.recover(&me, &record);
         assert!(again.kept(&me, &record).is_empty());
+    }
+
+    /// A hand-off is held by nothing alone, and goes with the next event that wakes, in order.
+    #[test]
+    fn a_hand_off_goes_only_with_an_event_that_wakes() {
+        let scratch = Scratch::new();
+        let (events, id) = (WorkerEvents::default(), ConversationId("c".into()));
+        let task = TaskId("t-aaaa".into());
+        let by = Holder::Net("wn-1".into());
+        let mut hand_off = event(EventKind::FreshContext);
+        hand_off.at_ms = 1;
+        events.push(&id, &scratch.0, &task, None, hand_off);
+        assert!(events.hold_wake(&id, &scratch.0, &by, all, none).is_empty());
+        assert_eq!(events.kept(&id, &scratch.0)[0].held, None);
+        let mut ended = event(EventKind::TurnEnded);
+        ended.at_ms = 2;
+        events.push(&id, &scratch.0, &task, None, ended);
+        let held = events.hold_wake(&id, &scratch.0, &by, all, none);
+        assert_eq!(
+            held.iter().map(|kept| kept.event.event).collect::<Vec<_>>(),
+            [EventKind::FreshContext, EventKind::TurnEnded]
+        );
+        events.done(&id, &scratch.0, &by);
+        assert!(events.kept(&id, &scratch.0).is_empty());
+    }
+
+    /// Only an answered prompt pending: a hand-off still waits, with the stale prompt gone.
+    #[test]
+    fn a_hand_off_does_not_go_with_a_stale_event() {
+        let scratch = Scratch::new();
+        let (events, id) = (WorkerEvents::default(), ConversationId("c".into()));
+        let task = TaskId("t-aaaa".into());
+        let by = Holder::Net("wn-1".into());
+        events.push(&id, &scratch.0, &task, None, event(EventKind::FreshContext));
+        events.push(&id, &scratch.0, &task, None, event(EventKind::NeedsInput));
+        let stale = |kept: &Kept| kept.event.event == EventKind::NeedsInput;
+        assert!(events.hold_wake(&id, &scratch.0, &by, all, stale).is_empty());
+        assert_eq!(events.kept(&id, &scratch.0).len(), 1);
+        assert_eq!(events.kept(&id, &scratch.0)[0].held, None);
     }
 
     #[test]
