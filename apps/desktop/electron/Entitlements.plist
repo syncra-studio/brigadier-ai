@@ -12,5 +12,8 @@
   <true/>
   <key>com.apple.security.device.camera</key>
   <true/>
+  <!-- Web pages the user allows: the hardened runtime refuses Core Location without it. -->
+  <key>com.apple.security.personal-information.location</key>
+  <true/>
 </dict>
 </plist>

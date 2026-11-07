@@ -155,13 +155,16 @@ pub enum BrowserEvent {
     Closed,
     /// The page asked for a passkey, which this build can't use: the tab says so.
     PasskeyRefused,
-    /// The page asked for the camera or microphone, which its site's choices leave to the user:
+    /// The system refused, or has off, what the person allowed the page: `camera`, `microphone`, `location`.
+    PermissionRefused { origin: String, refused: Vec<String> },
+    /// The page asked for the camera, microphone or location, which its site's choices leave to the user:
     /// the tab asks, and answers `request` (`browser_permission`).
     Permission {
         request: u32,
         origin: String,
         camera: bool,
         microphone: bool,
+        location: bool,
     },
 }
 
@@ -257,7 +260,7 @@ pub enum SitePermission {
     Block,
 }
 
-/// A site that asked the built-in browser for the camera or microphone, and the user's choices.
+/// A site that asked the built-in browser for the camera, microphone or location, and the user's choices.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserSite {
@@ -265,6 +268,7 @@ pub struct BrowserSite {
     pub origin: String,
     pub camera: SitePermission,
     pub microphone: SitePermission,
+    pub location: SitePermission,
     /// When it last asked, in ms since the Unix epoch.
     pub asked_ms: i64,
 }

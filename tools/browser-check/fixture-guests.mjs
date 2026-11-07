@@ -11,6 +11,22 @@ a{color:#fff}button{font:16px system-ui;display:block;margin:8px 0;width:360px;h
 
 const IMAGE = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#d9a441"/></svg>`);
 
+// Section 8: asks for location on a press, and shows exactly what came back: a position or the error.
+const location = () => `${head("location fixture", "2d4a6c")}
+<button id="ask" onclick="ask()">Ask for my location</button>
+<button id="cam" onclick="cam()">Ask for the camera</button>
+<button id="mic" onclick="mic()">Ask for the microphone</button>
+<pre id="out">nothing asked yet</pre>
+<script>
+window.__fixture={log:[]};
+const say=(line)=>{__fixture.log.push(line);document.getElementById("out").textContent=__fixture.log.join("\\n")};
+function ask(){say("asked "+new Date().toISOString());navigator.geolocation.getCurrentPosition(
+  (p)=>say("position "+p.coords.latitude+","+p.coords.longitude+" accuracy "+p.coords.accuracy),
+  (e)=>say("error code "+e.code+": "+e.message),{timeout:30000})}
+function mic(){say("microphone asked");navigator.mediaDevices.getUserMedia({audio:true}).then((m)=>{say("microphone granted");m.getTracks().forEach((t)=>t.stop())},(e)=>say("microphone error "+e.name+": "+e.message))}
+function cam(){say("camera asked");navigator.mediaDevices.getUserMedia({video:true}).then((m)=>{say("camera granted");m.getTracks().forEach((t)=>t.stop())},(e)=>say("camera error "+e.name+": "+e.message))}
+</script>`;
+
 const menu = () => `${head("menu fixture", "2d4a6c")}
 <p><a id="link" href="/page/336699/linked">a link to right-click</a></p>
 <p><img id="image" src="${IMAGE}" alt="image"></p>
@@ -62,6 +78,7 @@ const linkFrame = () => `${head("link frame", "444444")}<style>body{padding:0;ma
 export function guestFixture(parts, url, response) {
   response.setHeader("content-type", "text/html");
   if (parts[1] === "menu") response.end(menu());
+  else if (parts[1] === "location") response.end(location());
   else if (parts[1] === "opener") response.end(opener(url.searchParams.get("child") ?? "/guests/child"));
   else if (parts[1] === "child") response.end(child());
   else if (parts[1] === "links") response.end(links(url.searchParams.get("frame") ?? ""));

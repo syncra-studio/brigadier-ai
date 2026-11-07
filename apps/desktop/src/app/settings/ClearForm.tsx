@@ -19,7 +19,7 @@ const RANGES = [
 
 type Kind = "history" | "cookies" | "cache" | "downloads" | "sites";
 
-/** Picked when the dialog opens: everything but the sites' camera and microphone choices. */
+/** Picked when the dialog opens: everything but the sites' camera, microphone and location choices. */
 const PICKED: Record<Kind, boolean> = { history: true, cookies: true, cache: true, downloads: true, sites: false };
 
 function sitesLine(count: number | null | undefined): string {
@@ -63,7 +63,7 @@ export function ClearForm({
         ]
       : []),
     { kind: "downloads", icon: <Download />, label: "Download history", detail: "The list only; downloaded files stay." },
-    { kind: "sites", icon: <SettingsCog />, label: "Site settings", detail: "Which sites may use your camera and microphone." },
+    { kind: "sites", icon: <SettingsCog />, label: "Site settings", detail: "Which sites may use your camera, microphone and location." },
   ];
   const any = kinds.some(({ kind }) => picked[kind]);
 

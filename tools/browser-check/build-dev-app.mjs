@@ -137,6 +137,7 @@ plist(info, "CFBundleIdentifier", "string", ID);
 // Background only: macOS can't make it the front app, even when the front app steps aside.
 plist(info, "LSBackgroundOnly", "bool", "true");
 plist(info, "NSLocationWhenInUseUsageDescription", "string", "A web page you're using asks for your location.");
+plist(info, "NSLocationUsageDescription", "string", "A web page you're using asks for your location.");
 renameHelpers(contents);
 const fuses = setFuses(path.join(contents, "Frameworks/Electron Framework.framework/Versions/A/Electron Framework"));
 

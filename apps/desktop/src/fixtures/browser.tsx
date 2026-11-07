@@ -52,8 +52,8 @@ const DOWNLOADS: BrowserDownload[] = [
 ];
 
 const SITES: BrowserSite[] = [
-  { origin: "https://meet.example.com", camera: "allow", microphone: "allow", askedMs: now - HOUR },
-  { origin: "http://localhost:3000", camera: "ask", microphone: "block", askedMs: now - 2 * HOUR },
+  { origin: "https://meet.example.com", camera: "allow", microphone: "allow", location: "ask", askedMs: now - HOUR },
+  { origin: "http://localhost:3000", camera: "ask", microphone: "block", location: "ask", askedMs: now - 2 * HOUR },
 ];
 
 /** What the page asked the shell for, in order: the commands and the arguments that matter. */
@@ -207,7 +207,7 @@ function Fixture() {
       },
       () => VIEWS.sites?.(),
       () => {
-        seen.sites = { title: text(document.querySelector("main h1")), choices: [text(button("Camera for http://localhost:3000")), text(button("Microphone for http://localhost:3000"))] };
+        seen.sites = { title: text(document.querySelector("main h1")), group: text(document.querySelector("main")).includes("Camera, microphone and location"), choices: [text(button("Camera for http://localhost:3000")), text(button("Microphone for http://localhost:3000")), text(button("Location for http://localhost:3000"))] };
         seen.siteEdges = all("main li").map(rowEdges);
         button("Browser")?.click();
       },

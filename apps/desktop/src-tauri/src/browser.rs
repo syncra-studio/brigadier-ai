@@ -1057,6 +1057,7 @@ pub(crate) mod embedded {
                         origin,
                         camera,
                         microphone,
+                        location: false,
                     });
                 }
             }

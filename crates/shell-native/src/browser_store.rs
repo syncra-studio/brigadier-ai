@@ -385,6 +385,8 @@ impl Store {
                     origin: row.get(0)?,
                     camera: permission(&row.get::<_, String>(1)?),
                     microphone: permission(&row.get::<_, String>(2)?),
+                    // Only the Electron shell's own store keeps a site's location.
+                    location: SitePermission::Ask,
                     asked_ms: row.get(3)?,
                 })
             })?

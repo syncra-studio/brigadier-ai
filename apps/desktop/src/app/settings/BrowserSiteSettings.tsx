@@ -10,7 +10,7 @@ import { browserSites, setSite } from "@/state/browserData";
 import { useDefaultProfile, useProfiles } from "@/state/browserProfilePlaces";
 
 /**
- * Settings › Browser › Site settings: every site that asked for the camera or microphone in a
+ * Settings › Browser › Site settings: every site that asked for the camera, microphone or location in a
  * profile, and what each may use there. Another profile's choices for the same site are its own.
  */
 export function BrowserSiteSettings({ profile: opened, onBack }: { profile?: string | undefined; onBack: () => void }) {
@@ -31,7 +31,7 @@ export function BrowserSiteSettings({ profile: opened, onBack }: { profile?: str
     };
   }, [profile]);
 
-  const choose = (origin: string, device: "camera" | "microphone", choice: SitePermission) => {
+  const choose = (origin: string, device: "camera" | "microphone" | "location", choice: SitePermission) => {
     setError(null);
     setSite(profile, origin, { [device]: choice })
       .then(() =>
@@ -43,7 +43,7 @@ export function BrowserSiteSettings({ profile: opened, onBack }: { profile?: str
   return (
     <SettingsPage
       title="Site settings"
-      description="Which sites may use your camera and microphone, for each profile."
+      description="Which sites may use your camera, microphone and location, for each profile."
       back={{ label: "Browser", onBack }}
     >
       <SettingsSection>
@@ -58,13 +58,13 @@ export function BrowserSiteSettings({ profile: opened, onBack }: { profile?: str
           </SettingsRow>
         </SettingsCard>
       </SettingsSection>
-      <SettingsSection title="Camera and microphone">
+      <SettingsSection title="Camera, microphone and location">
         <ErrorLine error={error} />
         {sites && sites.length === 0 ? (
           <SettingsCard>
             <EmptyState
               variant="card"
-              title="Sites that ask for your camera or microphone show here. Until you choose, each asks you first."
+              title="Sites that ask for your camera, microphone or location show here. Until you choose, each asks you first."
             />
           </SettingsCard>
         ) : (
