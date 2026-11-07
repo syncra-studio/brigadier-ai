@@ -20,8 +20,8 @@ function subagentsWait(labels: readonly string[]): StatusHead {
   return { text, tone: "still" };
 }
 
-/** Only paused workers: the user asked for that, nothing is stuck (D196). */
-const PAUSED: StatusHead = { text: "Paused on your request", tone: "still" };
+/** Only paused workers: nothing is stuck (D196). The user or the session may have paused them, so it names neither. */
+const PAUSED: StatusHead = { text: "Paused", tone: "still" };
 const pausedOnly = (rows: readonly WorkerRow[]) => rows.length > 0 && rows.every((row) => row.paused);
 
 /** A wait on workers, named by the Workers card's names when it is one. */
