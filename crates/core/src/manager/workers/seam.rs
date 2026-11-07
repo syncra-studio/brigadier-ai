@@ -1,14 +1,13 @@
-//! A worker's hand-off to a fresh CLI session (D14). Its CLI compacts by itself. After
-//! [`HANDOFF_AFTER`] compactions in one CLI session, once its turn ends (and its session
-//! heard that end as any other), it is asked for a hand-off note in a turn of its own; its
-//! CLI then closes, and the next message its session sends starts a fresh session of the same
-//! CLI as the same worker, in the same workspace, from the note and the `brigadier context`
-//! pointer, with nothing else put in (D13). A compaction that fails or keeps refilling the
-//! context cuts its work off instead: its session hears nothing of that turn (run2-D44), the
-//! note is asked for at once, and the successor carries on by itself. A context too long for
-//! the model, which a note turn would overflow too, hands off without a note. The note is
-//! never steered into a running turn: a steer that reached the CLI after its turn ended would
-//! start the note turn behind the successor's back.
+//! A worker's hand-off to a fresh CLI session (D14), the same cycle as a thread's. Its CLI
+//! compacts by itself. At its [`HANDOFF_AFTER`]th compaction in one CLI session it is asked for
+//! a hand-off note at once, steered into the turn that runs, as a thread is; its CLI then closes
+//! and a fresh session of the same CLI goes on by itself as the same worker, in the same
+//! workspace, from the note and the `brigadier context` pointer, with nothing else put in (D13).
+//! Its session hears nothing until the work's turn ends (run2-D44). A compaction that fails or
+//! keeps refilling the context ends its turn first: the note is asked for then. A context too
+//! long for the model, which a note turn would overflow too, hands off without a note. A steer
+//! that reached the CLI just after its turn ended starts the note turn instead, which is as
+//! good: the turn end finds the hand-off under way, and closing the CLI ends what still runs.
 //!
 //! The successor starts as [`Origin::NewAs`], which never reruns the workspace's setup script
 //! or copies its secrets again (those run for a worker's first start only). The worker's
@@ -53,15 +52,16 @@ const RESTARTED: &str = "Brigadier restarted before it wrote one";
 /// lock's holder writes it, so it never overwrites a phase.
 const HELD_FILE: &str = "seam-held.json";
 
-/// A worker's hand-off under way, in memory. `carry_on`: its work was cut off, so its
-/// successor starts at once and goes on by itself; else it starts with the next message.
+/// A worker's hand-off under way, in memory. Its successor starts at once and goes on by itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SeamLive {
     /// The note is asked for once the running turn ends.
-    Owed { carry_on: bool },
-    /// Its note turn runs: messages wait for the successor. `fixes`: how many times it was
-    /// asked to fix a note that failed goal 13's check.
-    Nudged { carry_on: bool, fixes: u32 },
+    Owed,
+    /// It was asked for its note: messages wait for the successor. `fixes`: how many times it
+    /// was asked to fix a note that failed goal 13's check.
+    Nudged { fixes: u32 },
+    /// Its note is asked for once more once the running turn ends, the last time.
+    NudgeAgain,
     /// It hands off without a note when its turn ends (`death`: why).
     Due { death: String },
 }
@@ -69,26 +69,38 @@ pub(super) enum SeamLive {
 impl SeamLive {
     /// Messages its session sends now wait for its successor.
     pub(super) fn holds(&self) -> bool {
-        !matches!(self, Self::Owed { .. })
+        !matches!(self, Self::Owed)
     }
 }
 
 impl SessionManager {
-    /// One compaction of the worker's CLI ended: the [`HANDOFF_AFTER`]th in this CLI
-    /// session owes a hand-off once its turn ends; a failed one cuts its work off (D14).
+    /// One compaction of the worker's CLI ended: the [`HANDOFF_AFTER`]th in this CLI session, or
+    /// one that leaves its context above half its point, hands off now, as a thread's does; a
+    /// failed one once its turn ends (D14).
     pub(super) async fn worker_compacted(
         &self,
         live: &Arc<TaskLive>,
         cli: &Arc<Cli>,
+        tokens_after: Option<i64>,
         error: Option<&str>,
     ) {
         if error.is_some() {
-            Self::owe_seam(live, cli, SeamLive::Owed { carry_on: true }).await;
+            Self::owe_seam(live, cli, SeamLive::Owed).await;
             return;
         }
         let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
             return;
         };
+        // Still above half its point, it would compact again almost at once.
+        let window = self
+            .worker_context(&task)
+            .and_then(|size| size.window_tokens);
+        if let Some(after) = tokens_after
+            && after > self.seam_config().threshold(window, None) / 2
+        {
+            self.worker_handoff_now(live, cli, &task).await;
+            return;
+        }
         let record = self.worker_record(&task);
         let count = blocking(move || {
             let generation = read_seam(&record).generation;
@@ -100,8 +112,44 @@ impl SessionManager {
         .await
         .unwrap_or(0);
         if count >= HANDOFF_AFTER {
-            Self::owe_seam(live, cli, SeamLive::Owed { carry_on: false }).await;
+            self.worker_handoff_now(live, cli, &task).await;
         }
+    }
+
+    /// Asks for the note in the turn that runs, as a thread's seam does; with no turn to steer
+    /// into, once its turn ends. Spawned: a CLI's answer to the steer comes through the events
+    /// this was called from.
+    async fn worker_handoff_now(&self, live: &Arc<TaskLive>, cli: &Arc<Cli>, task: &Task) {
+        let running = {
+            let mut state = live.state.lock().await;
+            let running = state.seam.is_none()
+                && state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli))
+                && state.busy
+                && !state.compacting
+                && !state.stopping;
+            if running {
+                state.seam = Some(SeamLive::Nudged { fixes: 0 });
+            }
+            running
+        };
+        if !running {
+            Self::owe_seam(live, cli, SeamLive::Owed).await;
+            return;
+        }
+        let (manager, live, cli, task) = (self.arc(), live.clone(), cli.clone(), task.clone());
+        self.spawn(async move {
+            let steered = match manager.worker_note_ask(&cli, &task).await {
+                Some(text) => cli.session.steer_running(TurnInput::text(text)).await,
+                None => Ok(false),
+            };
+            if !matches!(steered, Ok(true)) {
+                // Still running: its turn's end asks. Over: that end took the hand-off on.
+                let mut state = live.state.lock().await;
+                if state.busy && state.seam == Some(SeamLive::Nudged { fixes: 0 }) {
+                    state.seam = Some(SeamLive::Owed);
+                }
+            }
+        });
     }
 
     /// Compacts the idle worker of `task` now through its CLI's own compaction, in a turn of its
@@ -144,7 +192,7 @@ impl SessionManager {
         let seam = if error.will_retry {
             return false;
         } else if thrashing(&error.message) {
-            SeamLive::Owed { carry_on: true }
+            SeamLive::Owed
         } else if error.kind == ErrorKind::ContextWindow {
             SeamLive::Due {
                 death: "its context was too long for the model".into(),
@@ -163,27 +211,25 @@ impl SessionManager {
             return false;
         }
         match (&state.seam, &seam) {
-            (None | Some(SeamLive::Owed { carry_on: false }), _) => state.seam = Some(seam),
-            (Some(SeamLive::Owed { carry_on: true }), SeamLive::Due { .. }) => {
-                state.seam = Some(seam);
-            }
+            (None, _) | (Some(SeamLive::Owed), SeamLive::Due { .. }) => state.seam = Some(seam),
+            // A cut-off's turn end may come before its CLI took the steered note request: asked
+            // once more, in a turn of its own; a cut-off of that one ends its generation.
+            (Some(SeamLive::Nudged { fixes: 0 }), _) => state.seam = Some(SeamLive::NudgeAgain),
             _ => {}
         }
         true
     }
 
-    /// The worker's turn ended with a hand-off under way (`seam`). Owed: a count's turn ends as
-    /// any other, and a cut-off one unheard; then its note is asked for in a turn of its own.
-    /// Its note turn's end, or a turn that overflowed, closes its CLI: the successor starts at
-    /// once when its work was cut off or a message waits, else with the next one. A usage
-    /// limit calls the hand-off off: the turn ends as any other, and its session hears it.
+    /// The worker's turn ended with a hand-off under way (`seam`), unheard by its session. Owed:
+    /// its note is asked for in a turn of its own. Its note's turn's end, or a turn that
+    /// overflowed, closes its CLI and the successor starts at once. A usage limit calls the
+    /// hand-off off: the turn ends as any other, and its session hears it.
     pub(super) async fn worker_seam_turn_end(
         &self,
         live: &Arc<TaskLive>,
         task: &Task,
         seam: SeamLive,
         status: TurnStatus,
-        compacted: bool,
     ) {
         let record = self.worker_record(task);
         let cutoff = live.take_cutoff().await;
@@ -200,34 +246,27 @@ impl SessionManager {
             live.set_cutoff(limit).await;
             return self.plain_turn_ended(live, task, status).await;
         }
-        let (carry_on, death) = match seam {
-            SeamLive::Owed { carry_on } => {
-                if !carry_on {
-                    // Its session's messages wait for the successor from before it hears the
-                    // turn end: one sent at once would start a turn the note's then cuts off.
-                    live.state.lock().await.seam = Some(SeamLive::Nudged { carry_on, fixes: 0 });
-                    if !compacted {
-                        self.plain_turn_ended(live, task, status).await;
-                    }
-                }
-                if self.worker_seam_nudge(live, task, carry_on).await {
+        let death = match seam {
+            SeamLive::Owed | SeamLive::NudgeAgain => {
+                let fixes = u32::from(seam == SeamLive::NudgeAgain);
+                if self.worker_seam_nudge(live, task, fixes).await {
                     return;
                 }
                 // Asked nothing, it hands off without a note.
-                (carry_on, Some("it couldn't be asked for one".to_owned()))
+                Some("it couldn't be asked for one".to_owned())
             }
-            SeamLive::Nudged { carry_on, fixes } => {
+            SeamLive::Nudged { fixes } => {
                 // Goal 13 (core-goals D9): a note that leaves out an open item, or no note, is
                 // fixed by the worker itself while it can still act.
                 if status == TurnStatus::Completed
                     && fixes < NOTE_FIXES
-                    && self.worker_note_fix(live, task, carry_on, fixes).await
+                    && self.worker_note_fix(live, task, fixes).await
                 {
                     return;
                 }
-                (carry_on, None)
+                None
             }
-            SeamLive::Due { death } => (true, Some(death)),
+            SeamLive::Due { death } => Some(death),
         };
         let predecessor = live.cli().await.map(|cli| cli.session.native_id());
         let at = record.clone();
@@ -254,36 +293,50 @@ impl SessionManager {
                 state.seam_over();
                 state.stopping = false;
             }
-            if carry_on {
-                self.plain_turn_ended(live, task, status).await;
-            }
+            self.plain_turn_ended(live, task, status).await;
             return;
         }
         live.close_cli().await;
         let _reroute = live.reroute.lock().await;
-        {
-            // Under one lock: a message either waits, and is seen here, or finds the hand-off over.
-            let mut state = live.state.lock().await;
-            if !carry_on && state.seam_held.is_empty() {
-                // Its successor starts with the next message.
-                state.seam_over();
+        if let Err(err) = self.worker_successor(live, task, Vec::new()).await {
+            {
+                let mut state = live.state.lock().await;
                 state.stopping = false;
                 state.busy = false;
-                return;
             }
-        }
-        if let Err(err) = self.worker_successor(live, task, Vec::new()).await {
-            self.plain_failed(task, format!("Its fresh session could not start: {err}."))
-                .await;
+            self.no_successor(task, &err).await;
         }
     }
 
     /// Asks the worker for its hand-off note in a turn of its own (its last one has ended):
     /// whether it was asked.
-    async fn worker_seam_nudge(&self, live: &Arc<TaskLive>, task: &Task, carry_on: bool) -> bool {
+    async fn worker_seam_nudge(&self, live: &Arc<TaskLive>, task: &Task, fixes: u32) -> bool {
         let Some(cli) = live.cli().await else {
             return false;
         };
+        let Some(text) = self.worker_note_ask(&cli, task).await else {
+            return false;
+        };
+        {
+            let mut state = live.state.lock().await;
+            state.seam = Some(SeamLive::Nudged { fixes });
+            state.busy = true;
+        }
+        if let Err(err) = cli.session.send(TurnInput::text(text)).await {
+            tracing::warn!(task = %live.id, error = %err, "could not ask the worker for its note");
+            let mut state = live.state.lock().await;
+            // The hold ran out meanwhile, and ends its generation itself.
+            if state.stopping {
+                return true;
+            }
+            state.busy = false;
+            return false;
+        }
+        true
+    }
+
+    /// Records that the worker is being asked for its note: the words to ask it with.
+    async fn worker_note_ask(&self, cli: &Arc<Cli>, task: &Task) -> Option<String> {
         let record = self.worker_record(task);
         let predecessor = cli.session.native_id();
         let at = record.clone();
@@ -305,38 +358,16 @@ impl SessionManager {
         let note = match note {
             Ok(note) => note,
             Err(err) => {
-                tracing::warn!(task = %live.id, error = %err, "could not record the worker's hand-off");
-                return false;
+                tracing::warn!(task = %task.id, error = %err, "could not record the worker's hand-off");
+                return None;
             }
         };
-        let text = format!("{}{LONG_NOTE}", nudge(&note));
-        {
-            let mut state = live.state.lock().await;
-            state.seam = Some(SeamLive::Nudged { carry_on, fixes: 0 });
-            state.busy = true;
-        }
-        if let Err(err) = cli.session.send(TurnInput::text(text)).await {
-            tracing::warn!(task = %live.id, error = %err, "could not ask the worker for its note");
-            let mut state = live.state.lock().await;
-            // The hold ran out meanwhile, and ends its generation itself.
-            if state.stopping {
-                return true;
-            }
-            state.busy = false;
-            return false;
-        }
-        true
+        Some(format!("{}{LONG_NOTE}", nudge(&note)))
     }
 
     /// Asks the worker, in a turn of its own, to fix its note when it fails goal 13's check:
     /// whether it was asked.
-    async fn worker_note_fix(
-        &self,
-        live: &Arc<TaskLive>,
-        task: &Task,
-        carry_on: bool,
-        fixes: u32,
-    ) -> bool {
+    async fn worker_note_fix(&self, live: &Arc<TaskLive>, task: &Task, fixes: u32) -> bool {
         let Some(cli) = live.cli().await else {
             return false;
         };
@@ -351,10 +382,7 @@ impl SessionManager {
         };
         {
             let mut state = live.state.lock().await;
-            state.seam = Some(SeamLive::Nudged {
-                carry_on,
-                fixes: fixes + 1,
-            });
+            state.seam = Some(SeamLive::Nudged { fixes: fixes + 1 });
             state.busy = true;
         }
         if let Err(err) = cli.session.send(TurnInput::text(fix)).await {
@@ -363,7 +391,7 @@ impl SessionManager {
             if state.stopping {
                 return true;
             }
-            state.seam = Some(SeamLive::Nudged { carry_on, fixes });
+            state.seam = Some(SeamLive::Nudged { fixes });
             state.busy = false;
             return false;
         }
@@ -502,8 +530,13 @@ impl SessionManager {
             .as_ref()
             .is_some_and(|plain| plain.resume_input.is_some());
         let waiting = !self.task_live(task).state.lock().await.seam_held.is_empty();
+        // Its session never heard the work's turn end: the work goes on by itself, as a thread's.
+        let working = matches!(
+            task.state,
+            TaskState::Running | TaskState::Starting | TaskState::Blocked
+        );
         if !active
-            || !waiting
+            || !(waiting || working)
             || resuming
             || explicitly_paused(task)
             || !self.worker_seam_closed(task).await
@@ -525,14 +558,19 @@ impl SessionManager {
             Ok(task) if !task.state.is_final() && !explicitly_paused(&task) => task,
             _ => return,
         };
-        if live.state.lock().await.seam_held.is_empty() || !self.worker_seam_closed(&task).await {
+        if !self.worker_seam_closed(&task).await {
             return;
         }
         let Err(err) = self.worker_successor(&live, &task, Vec::new()).await else {
             return;
         };
-        // Kept for its next message. A cut-off turn nothing goes on from is told as any other is.
-        tracing::warn!(task = %task.id, error = %err, "could not start a worker's successor after a restart");
+        self.no_successor(&task, &err).await;
+    }
+
+    /// Its successor couldn't start: what waits is kept for its next message, which tries again.
+    /// A cut-off turn nothing goes on from is told as any other is.
+    async fn no_successor(&self, task: &Task, err: &Error) {
+        tracing::warn!(task = %task.id, error = %err, "could not start a worker's successor");
         if matches!(task.state, TaskState::Running | TaskState::Blocked) {
             let _ = self
                 .update_task(&task.conversation_id, &task.id, |t| {
@@ -541,7 +579,7 @@ impl SessionManager {
                     t.mockup_drawing = false;
                 })
                 .await;
-            self.plain_cut_off(&task).await;
+            self.plain_cut_off(task).await;
         }
     }
 
@@ -788,7 +826,7 @@ impl SessionManager {
                 return;
             }
             tracing::warn!(task = %id, "a worker's hand-off ran past its hold; its generation ends");
-            self.worker_seam_turn_end(&live, &task, seam, TurnStatus::Failed, false)
+            self.worker_seam_turn_end(&live, &task, seam, TurnStatus::Failed)
                 .await;
         })
     }

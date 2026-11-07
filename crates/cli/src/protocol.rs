@@ -1279,6 +1279,56 @@ pub struct ContextOutput {
     /// `routing`: what `brigadier models --json` prints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub models: Option<crate::models::ModelsOutput>,
+    /// The overview: what the session and each of its workers used, by model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<SessionTokens>,
+}
+
+/// Tokens as the CLIs reported them, kept apart.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenCounts {
+    pub input: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+    pub output: i64,
+}
+
+impl TokenCounts {
+    pub fn total(&self) -> i64 {
+        self.input + self.cache_read + self.cache_write + self.output
+    }
+
+    pub fn add(&mut self, other: &Self) {
+        self.input += other.input;
+        self.cache_read += other.cache_read;
+        self.cache_write += other.cache_write;
+        self.output += other.output;
+    }
+}
+
+/// `brigadier state`: a session's stored token use.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTokens {
+    /// Everything below together.
+    pub session: TokenCounts,
+    pub rows: Vec<TokenRow>,
+}
+
+/// One owner's use on one model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenRow {
+    /// `thread`, `chat`, `review`… or a worker's title.
+    pub who: String,
+    /// The worker's id, when it is a worker's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
+    pub agent: String,
+    pub model: String,
+    #[serde(flatten)]
+    pub counts: TokenCounts,
 }
 
 /// One part as the overview lists it.

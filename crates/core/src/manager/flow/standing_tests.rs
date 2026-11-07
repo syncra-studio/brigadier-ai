@@ -92,7 +92,7 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
             "`brigadier ledger add` stamps each entry with an id and time (not in chats beside a tab);",
             "- Decision: yours, marked \"I decided\", with its defining sentence and reason (an answered question card is written for you).",
             "- Exact identifier (hash, absolute path:line, number with units, id)",
-            "- Open: a promise, or a question for the user; `brigadier ledger close <id>` when done.",
+            "- Open: a promise, a known problem, a thing to tell the user, or a question for the user; `brigadier ledger close <id>` when done.",
             "Plans and briefs cite ledger ids and mark your own lines \"proposed\". Tell the user each \"I decided\" that changes what they asked.",
         ] {
             assert!(expected.contains(line), "{line}");

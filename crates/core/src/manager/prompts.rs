@@ -555,13 +555,15 @@ mod tests {
     /// and `brigadier mcp list` (#707, Codex's naked worker answered "none" without looking): 7,099. Then the warning against a
     /// broad `pkill -f`, the likely cause of six workers ending at once (#811): 7,130. A worker
     /// ends its turn on a shown result (a demo worker merged because its brief said to): 8,105.
+    /// The first-message check, Opens for all that is unfinished, and what the user must read
+    /// never only beside a tool call (lost items in long sessions): 8,566.
     #[test]
     fn the_standing_instructions_stay_short() {
         let full = standing_text(&session_instructions(
             &Settings::default(),
             ProviderKind::Codex,
         ));
-        assert!(full.len() <= 8105, "{}", full.len());
+        assert!(full.len() <= 8566, "{}", full.len());
         assert!(STANDING_INSTRUCTIONS.lines().count() <= 24);
         // What every turn needs, and nothing that matters only at a seam.
         for words in [
@@ -741,7 +743,6 @@ mod tests {
             "needs input** (a permission prompt; only you see it, the worker waits): judge it yourself, then `brigadier send <id> --allow` or `--deny <reason>`",
             // Goal 3 (D118): a worker is moved, not closed and restarted.
             "usage limit:** let it wait for the reset, or move it now with `brigadier switch <id>`",
-            "fresh context** (compacted): check it still knows the brief, or resend.",
             "failed** or **interrupted:** `brigadier read <id> --last 10`; send it on or close it.",
             "gone:** read its branch; start a successor with \"continue from branch X; `git log` first\".",
             "quiet** (20 min silent, in a turn): read its last 10; nudge or close it.",

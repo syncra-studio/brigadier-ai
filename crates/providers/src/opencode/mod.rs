@@ -110,6 +110,8 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     coauthors_in_instructions: true,
     // Nothing to set: Brigadier asks it to compact, its own auto-compaction stays the backstop.
     compaction: Some(|_, _| crate::NativeCompaction::default()),
+    // Its `compaction.reserved` is room below the model's window, never a point in tokens.
+    worker_compaction: None,
     brigadier_compacts: true,
     subagent_transcripts: false,
     output_hook: false,

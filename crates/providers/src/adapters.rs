@@ -91,6 +91,9 @@ pub struct Adapter {
     /// How it compacts in place for a long session, at Brigadier's point in tokens (and
     /// whether the user set that point); none: it isn't run as one.
     pub compaction: Option<fn(i64, bool) -> crate::NativeCompaction>,
+    /// How a worker's CLI compacts by itself at Brigadier's point in tokens; a worker's long turn
+    /// gets no Brigadier `/compact`. None: at the CLI's own point.
+    pub worker_compaction: Option<fn(i64) -> crate::NativeCompaction>,
     /// Brigadier asks it to compact at its point, with what the summary must keep; otherwise
     /// it compacts by itself at the limit it was given.
     pub brigadier_compacts: bool,

@@ -218,6 +218,11 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
         backstop_window: Some(backstop_window(point)),
         ..crate::NativeCompaction::default()
     }),
+    // Claude holds it under a smaller model's window.
+    worker_compaction: Some(|point| crate::NativeCompaction {
+        backstop_window: Some(worker_window(point)),
+        ..crate::NativeCompaction::default()
+    }),
     brigadier_compacts: true,
     subagent_transcripts: true,
     output_hook: true,
@@ -268,6 +273,13 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
 /// compact ≈30k past the point. Claude takes windows of 100k to 1M.
 fn backstop_window(point: i64) -> i64 {
     (point + 50_000).clamp(100_000, 1_000_000)
+}
+
+/// Claude's auto-compact window for a worker, which nothing else compacts: Claude compacts by
+/// itself ≈20k below its window, so this one has it compact at Brigadier's point `point`. A point
+/// under ≈80k stops there, the least Claude takes.
+fn worker_window(point: i64) -> i64 {
+    (point + 20_000).clamp(100_000, 1_000_000)
 }
 
 /// Where Claude Code keeps its login: on macOS a Keychain item (its file fallback watched
@@ -1247,6 +1259,12 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
     // successor instead (STRIP-DOWN-PLAN S22). A long session's thread compacts (run2-D5).
     if !compacts(spec) {
         settings["hooks"]["PreCompact"] = refuse_compaction_hook();
+    } else if let Some(words) = spec
+        .native_compaction
+        .as_ref()
+        .and_then(|native| native.compact_keep.as_deref())
+    {
+        settings["hooks"]["PreCompact"] = keep_on_compaction_hook(words);
     }
     // A session that calls `brigadier` reaches the daemon's socket under Claude's own sandbox
     // too, when the user turns that on: Claude's sandbox refuses every Unix socket it isn't told
@@ -1505,6 +1523,13 @@ fn refuse_compaction_hook() -> Value {
         "cat >/dev/null; printf '%s\\n' {} >&2; exit 2",
         shell_quote(REFUSED_COMPACTION)
     );
+    json!([{ "hooks": [{ "type": "command", "command": command }] }])
+}
+
+/// A `PreCompact` hook whose output Claude appends to the compaction's instructions, whether it
+/// compacts by itself or is asked to (exit 0, as Claude 2.1.319's hook help says).
+fn keep_on_compaction_hook(words: &str) -> Value {
+    let command = format!("cat >/dev/null; printf '%s\\n' {}", shell_quote(words));
     json!([{ "hooks": [{ "type": "command", "command": command }] }])
 }
 
@@ -4197,6 +4222,46 @@ for line in sys.stdin:
         assert!(
             session_env(&seam, true, None).contains(&("DISABLE_AUTO_COMPACT".into(), "1".into()))
         );
+    }
+
+    /// A worker compacts at its point by itself, keeping what the hook prints, with the user's
+    /// own window winning as for a thread.
+    #[test]
+    fn a_worker_compacts_at_its_point_keeping_what_its_hook_prints() {
+        assert_eq!(worker_window(200_000), 220_000);
+        assert_eq!(worker_window(30_000), 100_000);
+        let cwd = Temp::new();
+        let home = Temp::new();
+        let worker = SessionSpec {
+            native_compaction: Some(crate::model::NativeCompaction {
+                backstop_window: Some(worker_window(200_000)),
+                compact_keep: Some("Keep 'this' word.".into()),
+                ..crate::model::NativeCompaction::default()
+            }),
+            ..spec(cwd.path(), &[])
+        };
+        assert_eq!(
+            backstop(&worker, cwd.path(), Some(home.path())),
+            Some(220_000)
+        );
+        let layer = settings(&worker, &SubAgents::Any, false);
+        let command = layer["hooks"]["PreCompact"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let run = std::process::Command::new("sh")
+            .args(["-c", &command])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(run.status.code(), Some(0));
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "Keep 'this' word.\n");
+        std::fs::write(
+            home.path().join("settings.json"),
+            r#"{"autoCompactWindow": 400000}"#,
+        )
+        .unwrap();
+        assert_eq!(backstop(&worker, cwd.path(), Some(home.path())), None);
     }
 
     /// BUILD-PLAN D2.3: a session that must not compact refuses Claude's compaction with a

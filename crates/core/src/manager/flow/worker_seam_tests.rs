@@ -1,10 +1,10 @@
-//! A worker's hand-off to a fresh CLI session (D14): its CLI compacts by itself, and its third
-//! compaction in one CLI session asks for its note once its turn ends (its session heard that
-//! end); the next message its session sends starts a fresh session as the same worker, in the
-//! same worktree with its setup not run again, from the note and the `brigadier context`
-//! pointer (D13). A failed compaction or a thrash hands off at once, unheard; a context too
-//! long for the model hands off without a note. A restart at each step starts one successor
-//! and sends nothing twice.
+//! A worker's hand-off to a fresh CLI session (D14), the same cycle as a thread's: its CLI
+//! compacts by itself, and its third compaction in one CLI session asks for its note in the
+//! running turn; a fresh session then goes on by itself as the same worker, in the same worktree
+//! with its setup not run again, from the note and the `brigadier context` pointer (D13). A
+//! failed compaction or a thrash hands off at once, unheard; a context too long for the model
+//! hands off without a note. A restart at each step starts one successor and sends nothing
+//! twice.
 
 use std::sync::{Arc, Mutex};
 
@@ -27,6 +27,8 @@ struct Seen {
     routed: std::sync::atomic::AtomicBool,
     /// Its next note turn hits a usage limit.
     limit_note: std::sync::atomic::AtomicBool,
+    /// Its next note turn stops as Claude's thrash guard does.
+    thrash_note: std::sync::atomic::AtomicBool,
 }
 
 impl Seen {
@@ -87,6 +89,8 @@ async fn compact(turn: &Turn, failed: bool) {
     })
     .await;
 }
+
+const THRASHING: &str = "Autocompact is thrashing: the context refilled right after compacting.";
 
 /// The worker: "Grow." compacts once; "Fail." compacts and fails to; "Thrash." stops as
 /// Claude's thrash guard does; "Overflow." is too long for the model; a nudge writes its note.
@@ -151,6 +155,13 @@ fn script(seen: Arc<Seen>) -> Script {
             }
             if turn.input.starts_with(NUDGE_MARK) {
                 if seen
+                    .thrash_note
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    turn.emit(error(ErrorKind::Other, THRASHING)).await;
+                    return Reply::failed(THRASHING);
+                }
+                if seen
                     .limit_note
                     .swap(false, std::sync::atomic::Ordering::SeqCst)
                 {
@@ -172,12 +183,28 @@ fn script(seen: Arc<Seen>) -> Script {
                 return Reply::failed("Compaction failed.");
             }
             if said.contains("Thrash.") {
-                turn.emit(error(
-                    ErrorKind::Other,
-                    "Autocompact is thrashing: the context refilled right after compacting.",
-                ))
+                turn.emit(error(ErrorKind::Other, THRASHING)).await;
+                return Reply::failed(THRASHING);
+            }
+            // Its third compaction's note request is steered in, and Claude's thrash guard stops
+            // the turn before it reads it.
+            if said.contains("Grow and thrash.") {
+                compact(&turn, false).await;
+                let _ = turn.steered().await;
+                turn.emit(error(ErrorKind::Other, THRASHING)).await;
+                return Reply::failed(THRASHING);
+            }
+            // Compacting leaves the context near its point.
+            if said.contains("Swell.") {
+                turn.emit(ProviderEvent::CompactionEnded {
+                    automatic: true,
+                    tokens_before: Some(190_000),
+                    tokens_after: Some(150_000),
+                    error: None,
+                    native_id: None,
+                })
                 .await;
-                return Reply::failed("Autocompact is thrashing.");
+                return Reply::text("Swollen.");
             }
             if said.contains("Overflow.") {
                 turn.emit(error(ErrorKind::ContextWindow, "Prompt is too long"))
@@ -207,6 +234,7 @@ async fn flow_then(
     let options = Options {
         behavior: Arc::new(FakeBehavior {
             session_file: true,
+            take_in_steers: true,
             ..FakeBehavior::default()
         }),
         files: vec![(".brigadier/setup", SETUP), (".gitignore", ".setup-runs\n")],
@@ -273,14 +301,15 @@ async fn the_third_compaction_hands_a_worker_to_a_fresh_session_in_its_worktree(
     assert_eq!((long.generation, long.compactions), (1, 2));
     assert!(seen.given(NUDGE_MARK).is_empty());
 
-    // The third: its session hears the turn end, then the note is asked for in a turn of
-    // its own, and its CLI closes.
+    // The third: its note is asked for in the running turn, and a fresh CLI session goes on by
+    // itself, from the note and the pointer, with nothing else put in (D13). Its session hears
+    // only the end of the work, the successor's.
     send(&flow, &task, "Grow.").await;
-    until(&flow, "the generation closed", || {
-        matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
+    until(&flow, "the successor", || {
+        seam_file(&flow, &task).generation == 2
     })
     .await;
-    until(&flow, "the third grow heard", || {
+    until(&flow, "the successor's turn heard", || {
         seen.heard("finished") == 4
     })
     .await;
@@ -288,27 +317,13 @@ async fn the_third_compaction_hands_a_worker_to_a_fresh_session_in_its_worktree(
     let nudges = seen.given(NUDGE_MARK);
     assert_eq!(nudges.len(), 1, "{nudges:?}");
     assert_eq!(nudges[0].0, first);
-
-    // The next message starts its successor: a fresh CLI session, from the note and the
-    // pointer, with that message, and nothing else put in (D13).
-    send(&flow, &task, "Next.").await;
-    until(&flow, "the successor", || {
-        seam_file(&flow, &task).generation == 2
-    })
-    .await;
-    until(&flow, "the successor's turn heard", || {
-        seen.heard("finished") == 5
-    })
-    .await;
-    flow.idle().await;
-    let next = seen.given("Next.");
+    let next = seen.given(CARRY_ON);
     assert_eq!(next.len(), 1, "{next:?}");
     let (successor, input) = &next[0];
     assert_ne!(successor, &first);
     assert!(input.starts_with(HANDOFF_MARK), "{input}");
     assert!(input.contains(CONTEXT_POINTER), "{input}");
     assert!(input.contains("Next: grow more."), "{input}");
-    assert!(!input.contains(CARRY_ON), "{input}");
     let file = seam_file(&flow, &task);
     assert_eq!(&file.seams[0].successor, successor);
     assert_eq!(
@@ -356,29 +371,155 @@ async fn the_third_compaction_hands_a_worker_to_a_fresh_session_in_its_worktree(
 
     // Its successor counts its own compactions from one.
     send(&flow, &task, "Grow.").await;
-    until(&flow, "its grow heard", || seen.heard("finished") == 6).await;
+    until(&flow, "its grow heard", || seen.heard("finished") == 5).await;
     let long = read_long(&record(&flow, &task));
     assert_eq!((long.generation, long.compactions), (2, 1));
+    // No compaction woke its session.
+    let parent = seen.parent.lock().unwrap().clone();
+    assert!(
+        !parent
+            .iter()
+            .any(|input| input.contains("compacted its context")),
+        "{parent:#?}"
+    );
     flow.stop().await;
 }
 
-/// A message its session sends the moment it hears the third compaction's turn end waits for
-/// the successor: the note turn never cuts it off on the old CLI (phase review).
+/// A thrash stop before its CLI read the steered note request: the note is asked for once more,
+/// in a turn of its own, and the worker goes on from it, unheard (the live run's lost notes).
 #[tokio::test]
-async fn a_message_sent_as_the_handoff_turn_ends_goes_to_the_successor() {
+async fn a_thrash_before_the_steered_note_request_is_read_asks_again_in_a_turn_of_its_own() {
     let seen = Arc::new(Seen::default());
-    let (flow, task) = flow("worker-seam-race", seen.clone()).await;
-    let first = seen.worker.lock().unwrap()[0].0.clone();
+    let (flow, task) = flow("worker-seam-thrash-reask", seen.clone()).await;
     for n in 1..=2 {
         send(&flow, &task, "Grow.").await;
         until(&flow, "the grow heard", || seen.heard("finished") == n + 1).await;
     }
-    send(&flow, &task, "Grow.").await;
-    flow.until("the third grow's turn ended", |board| {
-        Flow::task(board, 1).state == crate::work::TaskState::Reported
+    send(&flow, &task, "Grow and thrash.").await;
+    until(&flow, "the successor", || {
+        seam_file(&flow, &task).generation == 2
     })
     .await;
+    until(&flow, "the successor's turn heard", || {
+        seen.heard("finished") == 4
+    })
+    .await;
+    flow.idle().await;
+    // The steered request went unread; only the second reached a turn of its own.
+    assert_eq!(seen.given(NUDGE_MARK).len(), 1);
+    let file = seam_file(&flow, &task);
+    assert!(file.seams[0].end.death.is_none(), "{:?}", file.seams[0]);
+    assert!(file.seams[0].note.is_some());
+    let carried = seen.given(CARRY_ON);
+    assert_eq!(carried.len(), 1, "{carried:?}");
+    assert!(carried[0].1.contains("Next: grow more."));
+    assert_eq!(seen.heard("failed"), 0);
+    flow.stop().await;
+}
+
+/// A note turn that thrashes too is asked no more: the generation ends without a note, and the
+/// successor goes on, however often its CLI would stop again (the live run's endless loop).
+#[tokio::test]
+async fn a_second_thrash_ends_the_generation_without_asking_again() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task) = flow("worker-seam-thrash-once", seen.clone()).await;
+    for n in 1..=2 {
+        send(&flow, &task, "Grow.").await;
+        until(&flow, "the grow heard", || seen.heard("finished") == n + 1).await;
+    }
+    seen.thrash_note
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    send(&flow, &task, "Grow and thrash.").await;
+    until(&flow, "the successor", || {
+        seam_file(&flow, &task).generation == 2
+    })
+    .await;
+    until(&flow, "the successor's turn heard", || {
+        seen.heard("finished") == 4
+    })
+    .await;
+    flow.idle().await;
+    assert_eq!(seen.given(NUDGE_MARK).len(), 1);
+    let file = seam_file(&flow, &task);
+    assert!(file.seams[0].end.death.is_some(), "{:?}", file.seams[0]);
+    assert_eq!(seen.given(CARRY_ON).len(), 1);
+    flow.stop().await;
+}
+
+/// A compaction that leaves its context above half its point hands off at once, the first one
+/// too, as a thread's does.
+#[tokio::test]
+async fn a_compaction_that_leaves_the_context_near_its_point_hands_off() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task) = flow("worker-seam-half", seen.clone()).await;
+    send(&flow, &task, "Swell.").await;
+    until(&flow, "the successor", || {
+        seam_file(&flow, &task).generation == 2
+    })
+    .await;
+    until(&flow, "the successor's turn heard", || {
+        seen.heard("finished") == 2
+    })
+    .await;
+    flow.idle().await;
+    assert_eq!(seen.given(NUDGE_MARK).len(), 1);
+    assert_eq!(seen.given(CARRY_ON).len(), 1);
+    assert!(seam_file(&flow, &task).seams[0].end.death.is_none());
+    flow.stop().await;
+}
+
+/// What its session and the user send it is in its brief, in the order it came: where it reads
+/// it after a compaction or a hand-off.
+#[tokio::test]
+async fn what_a_worker_is_sent_goes_in_its_brief() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task) = flow("worker-seam-sent", seen.clone()).await;
+    let caller = crate::manager::cli::CliCaller {
+        conversation_id: flow.conversation.clone(),
+        task_id: None,
+        grant: String::new(),
+    };
+    flow.manager
+        .cli_send(
+            &caller,
+            &task.id.0[task.id.0.len() - 8..],
+            Some("From the session.".into()),
+            None,
+        )
+        .await
+        .unwrap();
+    until(&flow, "its turn heard", || seen.heard("finished") == 2).await;
+    flow.idle().await;
+    flow.manager
+        .send_to_worker(
+            flow.conversation.clone(),
+            task.id.clone(),
+            "From the user.".into(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    until(&flow, "its turn heard", || seen.heard("finished") == 3).await;
+    flow.idle().await;
+    assert_eq!(
+        worker(&flow).await.messages,
+        ["From the session.", "From the user."]
+    );
+    flow.stop().await;
+}
+
+/// A message its session sends while the third compaction's note is written waits for the
+/// successor: the note turn never cuts it off on the old CLI (phase review).
+#[tokio::test]
+async fn a_message_sent_during_the_note_goes_to_the_successor() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task, _, release) = gated_flow("worker-seam-race", seen.clone()).await;
+    let first = seen.worker.lock().unwrap()[0].0.clone();
     send(&flow, &task, "Next.").await;
+    release.notify_one();
     until(&flow, "the successor's turn", || {
         seen.given("Next.").iter().any(|(id, _)| id != &first)
     })
@@ -388,6 +529,7 @@ async fn a_message_sent_as_the_handoff_turn_ends_goes_to_the_successor() {
     assert_eq!(next.len(), 1, "{next:?}");
     assert_ne!(next[0].0, first);
     assert!(next[0].1.starts_with(HANDOFF_MARK), "{}", next[0].1);
+    assert!(!next[0].1.contains(CARRY_ON), "{}", next[0].1);
     flow.stop().await;
 }
 
@@ -485,6 +627,7 @@ async fn gated_flow(
     let options = Options {
         behavior: Arc::new(FakeBehavior {
             session_file: true,
+            take_in_steers: true,
             ..FakeBehavior::default()
         }),
         ..Options::default()
@@ -515,27 +658,16 @@ async fn gated_flow(
 }
 
 #[tokio::test]
-async fn a_restart_in_the_note_turn_closes_the_generation_and_the_next_message_starts_one() {
+async fn a_restart_in_the_note_turn_ends_the_generation_and_the_successor_goes_on() {
     let seen = Arc::new(Seen::default());
     let (mut flow, task, _, _) = gated_flow("worker-seam-restart-note", seen.clone()).await;
     flow.crash().await;
-    until(&flow, "the generation closed", || {
-        matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
-    })
-    .await;
-    assert_eq!(
-        seam_file(&flow, &task).generation,
-        1,
-        "nothing started before its session sent more"
-    );
-    flow.settled().await;
-    send(&flow, &task, "Next.").await;
     until(&flow, "the successor", || {
         seam_file(&flow, &task).generation == 2
     })
     .await;
     flow.idle().await;
-    let next = seen.given("Next.");
+    let next = seen.given(CARRY_ON);
     assert_eq!(next.len(), 1, "{next:?}");
     assert!(next[0].1.starts_with(HANDOFF_MARK));
     assert!(
@@ -550,26 +682,12 @@ async fn a_restart_in_the_note_turn_closes_the_generation_and_the_next_message_s
 async fn a_crash_before_the_successor_launched_sends_its_message_once() {
     let seen = Arc::new(Seen::default());
     let (mut flow, task, _, release) = gated_flow("worker-seam-crash-before", seen.clone()).await;
-    release.notify_one();
-    until(&flow, "the generation closed", || {
-        matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
-    })
-    .await;
+    send(&flow, &task, "After.").await;
     // Its successor's CLI never comes up before the crash.
     let reached = Arc::new(tokio::sync::Notify::new());
     *flow.behavior.hold_start.lock().unwrap() =
         Some((reached.clone(), Arc::new(tokio::sync::Notify::new())));
-    let (manager, conversation, held) = (
-        flow.manager.clone(),
-        flow.conversation.clone(),
-        task.clone(),
-    );
-    tokio::spawn(async move {
-        let task = manager.task_by_id(&conversation, &held.id).await.unwrap();
-        let _ = manager
-            .message_worker(&conversation, &task, "After.".into())
-            .await;
-    });
+    release.notify_one();
     reached.notified().await;
     let Phase::Starting {
         successor,
@@ -579,7 +697,8 @@ async fn a_crash_before_the_successor_launched_sends_its_message_once() {
     else {
         panic!("not starting")
     };
-    assert_eq!(messages, vec!["After.".to_owned()]);
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(messages[0].starts_with("After."), "{messages:?}");
     flow.crash().await;
     // Another successor starts at once, carrying it, once.
     until(&flow, "the successor", || {
@@ -599,34 +718,13 @@ async fn a_crash_before_the_successor_launched_sends_its_message_once() {
 async fn a_crash_after_the_successor_took_its_handoff_resumes_it() {
     let seen = Arc::new(Seen::default());
     let (mut flow, task, _, release) = gated_flow("worker-seam-crash-after", seen.clone()).await;
-    release.notify_one();
-    until(&flow, "the generation closed", || {
-        matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
-    })
-    .await;
-    // The third grow's report can still be starting a parent turn after the seam
-    // closes. Drain it before arming the flow-wide next-send gate, so that gate
-    // belongs to the successor's hand-off rather than the parent's notification.
-    until(&flow, "the third grow heard", || {
-        seen.heard("finished") == 4
-    })
-    .await;
+    send(&flow, &task, "After.").await;
     flow.idle().await;
     // Its successor took its input, and Brigadier dies before it heard so.
     let reached = Arc::new(tokio::sync::Notify::new());
     *flow.behavior.hold_send.lock().unwrap() =
         Some((reached.clone(), Arc::new(tokio::sync::Notify::new())));
-    let (manager, conversation, held) = (
-        flow.manager.clone(),
-        flow.conversation.clone(),
-        task.clone(),
-    );
-    tokio::spawn(async move {
-        let task = manager.task_by_id(&conversation, &held.id).await.unwrap();
-        let _ = manager
-            .message_worker(&conversation, &task, "After.".into())
-            .await;
-    });
+    release.notify_one();
     reached.notified().await;
     let Phase::Starting { successor, .. } = seam_file(&flow, &task).phase else {
         panic!("not starting")
@@ -793,17 +891,13 @@ async fn a_worker_goes_through_two_rebirths_its_check_fixing_its_note_each_time(
     .unwrap();
     let mut heard = 1;
     for generation in [2, 3] {
-        for _ in 0..crate::manager::long_sessions::HANDOFF_AFTER {
+        // Two heard as any turn; the third's end is its successor's.
+        for _ in 1..crate::manager::long_sessions::HANDOFF_AFTER {
             send(&flow, &task, "Grow.").await;
             heard += 1;
             until(&flow, "the grow heard", || seen.heard("finished") == heard).await;
         }
-        until(&flow, "the generation closed", || {
-            matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
-        })
-        .await;
-        flow.idle().await;
-        send(&flow, &task, "Next.").await;
+        send(&flow, &task, "Grow.").await;
         heard += 1;
         until(&flow, "the successor", || {
             seam_file(&flow, &task).generation == generation
@@ -867,23 +961,22 @@ async fn three_compactions_asked_for_on_an_idle_worker_hand_it_off_unheard() {
         .await;
         flow.idle().await;
     }
-    until(&flow, "the generation closed", || {
-        matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
+    // Its successor goes on by itself, as after any hand-off, and only its end is heard.
+    until(&flow, "the successor", || {
+        seam_file(&flow, &task).generation == 2
+    })
+    .await;
+    until(&flow, "the successor's turn heard", || {
+        seen.heard("finished") == 2
     })
     .await;
     assert_eq!(seen.given(NUDGE_MARK).len(), 1);
     assert_eq!(
         seen.heard("finished"),
-        1,
+        2,
         "{:?}",
         seen.parent.lock().unwrap()
     );
-    // The next message starts its successor, as after any hand-off.
-    send(&flow, &task, "Next.").await;
-    until(&flow, "the successor", || {
-        seam_file(&flow, &task).generation == 2
-    })
-    .await;
     flow.stop().await;
 }
 
@@ -965,13 +1058,7 @@ async fn a_message_in_both_the_side_file_and_starting_goes_once() {
 #[tokio::test]
 async fn a_crash_between_saving_a_message_and_starting_delivers_it_once() {
     let seen = Arc::new(Seen::default());
-    let (mut flow, task, _, release) = gated_flow("worker-seam-saved", seen.clone()).await;
-    release.notify_one();
-    until(&flow, "the generation closed", || {
-        matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
-    })
-    .await;
-    flow.idle().await;
+    let (mut flow, task, _, _) = gated_flow("worker-seam-saved", seen.clone()).await;
     std::fs::write(
         record(&flow, &task).join("seam-held.json"),
         serde_json::to_vec(&["Saved.\n\n[Worker message saved-1]"]).unwrap(),
@@ -1219,14 +1306,14 @@ async fn a_refused_send_leaves_the_worker_idle() {
 async fn a_message_whose_successor_could_not_start_is_not_kept_as_well() {
     let seen = Arc::new(Seen::default());
     let (flow, task, _, release) = gated_flow("worker-seam-refused", seen.clone()).await;
+    let provider = task.route.choice.provider;
+    flow.behavior.refuse_sends.lock().unwrap().push(provider);
     release.notify_one();
     until(&flow, "the generation closed", || {
         matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
     })
     .await;
     flow.idle().await;
-    let provider = task.route.choice.provider;
-    flow.behavior.refuse_sends.lock().unwrap().push(provider);
     let latest = worker(&flow).await;
     let refused = flow
         .manager

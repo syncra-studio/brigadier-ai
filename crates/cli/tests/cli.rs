@@ -711,6 +711,7 @@ fn context_sample(part: Option<ContextPart>, name: &Option<String>) -> ContextOu
         items: Vec::new(),
         files: Vec::new(),
         models: None,
+        tokens: None,
     };
     match part {
         None => {
@@ -725,6 +726,21 @@ fn context_sample(part: Option<ContextPart>, name: &Option<String>) -> ContextOu
                     command: format!("brigadier context {}", part.word()),
                 })
                 .collect();
+            output.tokens = Some(brigadier_cli::protocol::SessionTokens {
+                session: brigadier_cli::protocol::TokenCounts {
+                    input: 1,
+                    cache_read: 2,
+                    cache_write: 3,
+                    output: 4,
+                },
+                rows: vec![brigadier_cli::protocol::TokenRow {
+                    who: "Fix it".into(),
+                    worker: Some("f58f7f4e".into()),
+                    agent: "claude".into(),
+                    model: "haiku".into(),
+                    counts: brigadier_cli::protocol::TokenCounts::default(),
+                }],
+            });
         }
         Some(ContextPart::Decisions | ContextPart::Open | ContextPart::Ledger) => {
             output.entries = vec![

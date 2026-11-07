@@ -1162,16 +1162,6 @@ impl SessionManager {
         self.worker_event(conversation, task, card, event);
     }
 
-    /// A plain worker's CLI compacted its context.
-    pub(super) fn plain_fresh_context(&self, live: &TaskLive) {
-        self.worker_event(
-            &live.conversation_id,
-            &live.id,
-            None,
-            event(&live.id, EventKind::FreshContext),
-        );
-    }
-
     /// A plain worker's turn a restart cut off goes on by itself, once (D9 a): its CLI session
     /// resumed with a word to check git status and git log first, or, cut off before its
     /// session began, started again on its prompt in its own worktree. False when it went on
@@ -1325,9 +1315,26 @@ impl SessionManager {
             }
         }
         let queued = live.busy().await || super::workers::explicitly_paused(task);
-        self.message_worker(&task.conversation_id, task, text)
+        self.message_worker(&task.conversation_id, task, text.clone())
             .await?;
+        self.keep_sent(task, text).await;
         Ok(queued)
+    }
+
+    /// What reached worker `task` goes in its brief (`brigadier context brief`): after a
+    /// compaction or a hand-off that is where it reads what it was sent.
+    async fn keep_sent(&self, task: &Task, text: String) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let kept = self
+            .update_task(&task.conversation_id, &task.id, |task| {
+                task.messages.push(text);
+            })
+            .await;
+        if let Err(err) = kept {
+            tracing::warn!(task = %task.id, error = %err, "could not keep what its worker was sent");
+        }
     }
 
     /// The user's notes on a mockup, from its session's Mockup tab: `text` and the marked
@@ -1686,6 +1693,18 @@ impl SessionManager {
         let input = self
             .direct_input(conversation_id, scratch, &marked, attachments, mentions)
             .await?;
+        // Its pasted texts in their places, as it read them.
+        let words = input
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                brigadier_providers::InputPart::Text(text) => {
+                    Some(super::workers::without_mark(text))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
         let wait = self.message_takes_quota_wait(&live, &task).await?;
         if let Err(err) = self.deliver_to_worker(conversation_id, &task, input).await {
             if let Some(wait) = wait {
@@ -1694,6 +1713,7 @@ impl SessionManager {
             return Err(err);
         }
         drop(settled);
+        self.keep_sent(&task, words).await;
         // It reached the worker: the record and the note only log their failures.
         let shown = super::brains::cut(text.trim(), crate::work::STEP_TEXT_MAX);
         self.orchestrator_step(

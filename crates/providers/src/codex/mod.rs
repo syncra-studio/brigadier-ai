@@ -235,6 +235,11 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
         codex_limit: set.then_some(point),
         ..crate::NativeCompaction::default()
     }),
+    // Codex holds it under its own 90% of a smaller window.
+    worker_compaction: Some(|point| crate::NativeCompaction {
+        codex_limit: Some(point),
+        ..crate::NativeCompaction::default()
+    }),
     brigadier_compacts: false,
     subagent_transcripts: false,
     output_hook: false,

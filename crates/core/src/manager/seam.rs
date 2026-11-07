@@ -330,7 +330,11 @@ pub(crate) fn nudge(note: &Path) -> String {
          anything they ask, as a rule or decision of the user's. Keep the note concise; reference transcript entries instead of \
          copying transcripts or command outputs. Finish the step you are on, at a boundary you \
          choose; don't start new \
-         work.\nUpdate the ledger. Close each open item below that is done (`brigadier ledger \
+         work.\nUpdate the ledger. Everything unfinished (a promise, a known problem, a thing to \
+         tell the user) goes in it as an Open (`brigadier ledger add \"Open: …\"`) before the \
+         note, never in the note alone. Read your first message (a worker: its brief) with \
+         `brigadier context brief` and add an Open for each requirement in it that is neither \
+         proved done nor an open item. Close each open item below that is done (`brigadier ledger \
          close <id>`) and name every other one by its id (L<n>) in the note, and check your \
          last steps kept each rule below; write any slip as a Failed check.\nThen write the hand-off note at {}: doing now, waiting for, next, \
          \"read A,B,C; next D,E\", stale ledger entries. Don't restate rules or decisions; the \

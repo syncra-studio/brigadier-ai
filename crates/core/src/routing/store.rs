@@ -249,6 +249,20 @@ pub struct TurnUsage {
     pub cache: CacheTrace,
 }
 
+/// One owner's use on one model, summed over a conversation's turns.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnerTokens {
+    /// A worker's or a review's; none: the conversation's own.
+    pub task_id: Option<String>,
+    pub step: Option<String>,
+    pub provider: String,
+    pub model: String,
+    pub input: i64,
+    pub cached_input: i64,
+    pub cache_write: i64,
+    pub output: i64,
+}
+
 /// Where a use's cache writes came from (BUILD-PLAN B0, research P0.1), worked out per model
 /// call and summed for the row.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -673,6 +687,35 @@ impl RoutingStore {
         .await
     }
 
+    /// What a conversation's turns used, every step, summed per owner and model.
+    pub async fn conversation_tokens(
+        self: &Arc<Self>,
+        conversation_id: String,
+    ) -> Result<Vec<OwnerTokens>> {
+        self.run(move |conn| {
+            let mut query = conn.prepare_cached(
+                "SELECT task_id, step, provider, model, SUM(input), SUM(cached_input),
+                        SUM(cache_write), SUM(output)
+                 FROM turn_usage WHERE conversation_id = ?1
+                 GROUP BY task_id, step, provider, model",
+            )?;
+            let rows = query.query_map(params![conversation_id], |row| {
+                Ok(OwnerTokens {
+                    task_id: row.get(0)?,
+                    step: row.get(1)?,
+                    provider: row.get(2)?,
+                    model: row.get(3)?,
+                    input: row.get(4)?,
+                    cached_input: row.get(5)?,
+                    cache_write: row.get(6)?,
+                    output: row.get(7)?,
+                })
+            })?;
+            rows.collect()
+        })
+        .await
+    }
+
     /// Records what a Codex child thread used since it was last metered: `turn` carries its
     /// total so far, and becomes a row of what is new (none when nothing is). Once per use,
     /// however often the thread is looked at, and whatever turn rows were pruned since.
@@ -1063,6 +1106,32 @@ mod tests {
             .map(|stored| stored.account.clone())
             .collect();
         assert_eq!(accounts, [AccountRef::own(ProviderKind::Codex), work]);
+    }
+
+    #[tokio::test]
+    async fn a_conversations_tokens_sum_per_owner_and_model_and_only_its_own() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-routing-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(&*dir).unwrap();
+        let store = RoutingStore::open(&dir.join("routing.sqlite")).unwrap();
+        for (conversation, task) in [
+            (Some("c1"), None),
+            (Some("c1"), None),
+            (Some("c1"), Some("t1")),
+            (Some("c2"), Some("t3")),
+        ] {
+            store.add_turn(turn(conversation, task)).await.unwrap();
+        }
+        let one = turn(Some("c1"), None);
+        let mut rows = store.conversation_tokens("c1".into()).await.unwrap();
+        rows.sort_by_key(|row| row.task_id.is_some());
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0].task_id, None);
+        assert_eq!(rows[0].input, 2 * one.input);
+        assert_eq!(rows[0].cached_input, 2 * one.cached_input);
+        assert_eq!(rows[0].cache_write, 2 * one.cache_write);
+        assert_eq!(rows[0].output, 2 * one.output);
+        assert_eq!(rows[1].task_id.as_deref(), Some("t1"));
     }
 
     #[tokio::test]
