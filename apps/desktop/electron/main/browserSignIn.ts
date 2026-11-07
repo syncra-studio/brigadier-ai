@@ -59,7 +59,8 @@ export function watchSignIn(contents: WebContents, tab: WebContents): void {
     note("guest-sign-in-rejected", { webContents: contents.id, shown: now });
     tell({ rejected: now });
   };
-  contents.on("did-navigate", address);
+  // Not at did-navigate: a tab's first load gets there before the app's page can tell which tab this is.
+  contents.on("did-finish-load", address);
   contents.on("did-navigate-in-page", address);
 
   let due: ReturnType<typeof setTimeout> | null = null;
