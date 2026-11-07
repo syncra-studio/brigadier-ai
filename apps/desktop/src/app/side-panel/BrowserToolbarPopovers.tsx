@@ -1,20 +1,22 @@
 import { type RefObject, useEffect, useState } from "react";
 
 import { TooltipIconButton, Button } from "@/components/controls";
-import { Camera, Download, Mic, X } from "@/components/icons";
+import { Camera, Download, MapPin, Mic, X } from "@/components/icons";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/overlays";
 import { revealPath } from "@/ipc/client";
-import type { BrowserDownload } from "@/ipc/generated";
-import { browserDownloads, openDownload, siteOf } from "@/state/browserData";
+import { browserDownloads, cancelDownload, downloadProgress, type DownloadRecord, openDownload, siteOf } from "@/state/browserData";
+import { useFrontProfile } from "@/state/browserProfilePlaces";
 import { openBrowserSettings } from "@/state/browserSettings";
-import { answerPermission, type BrowserAsking, useBrowsers } from "@/state/browsers";
+import { answerPermission, type BrowserAsking, closeOsRefused, openOsPermissionSettings, type OsRefused, useBrowsers } from "@/state/browsers";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
+const ARM_MS = 500;
+
 /**
- * The page's question for the camera or microphone, from the address field's start: allow it
- * while the tab stays on the site, this time only, or never (saved for the site). It stays until
- * it is answered or closed (which refuses this time), and leaves the page live around it.
+ * The page's question for the camera, microphone or location, from the address field's start:
+ * allow it on the site (saved for the profile), this time only, or never (saved too). It stays
+ * until it is answered or closed (which refuses this time), and leaves the page live around it.
  */
 export function PermissionPrompt({
   id,
@@ -31,9 +33,19 @@ export function PermissionPrompt({
   } catch {
     // The origin as the shell named it.
   }
+  // A click meant for the page must not land on a card that just came up under it.
+  const [armedFor, setArmedFor] = useState<number | null>(null);
+  const request = asking?.request ?? null;
+  useEffect(() => {
+    if (request === null) return;
+    const timer = setTimeout(() => setArmedFor(request), ARM_MS);
+    return () => clearTimeout(timer);
+  }, [request]);
+  const armed = request !== null && armedFor === request;
   const uses = [
     ...(asking?.camera ? [{ Icon: Camera, text: "Use your camera" }] : []),
     ...(asking?.microphone ? [{ Icon: Mic, text: "Use your microphone" }] : []),
+    ...(asking?.location ? [{ Icon: MapPin, text: "Know your location" }] : []),
   ];
   return (
     <Popover open={!!asking} onOpenChange={(open) => { if (!open) answerPermission(id, "dismiss"); }}>
@@ -63,19 +75,66 @@ export function PermissionPrompt({
           ))}
         </ul>
         <div className="mt-3 flex flex-col gap-1.5">
-          <Button size="sm" variant="secondary" onClick={() => answerPermission(id, "visiting")}>Allow while visiting the site</Button>
-          <Button size="sm" variant="secondary" onClick={() => answerPermission(id, "once")}>Allow this time</Button>
-          <Button size="sm" variant="secondary" onClick={() => answerPermission(id, "never")}>Never allow</Button>
+          <Button size="sm" variant="secondary" disabled={!armed} onClick={() => answerPermission(id, "visiting")}>Allow while visiting the site</Button>
+          <Button size="sm" variant="secondary" disabled={!armed} onClick={() => answerPermission(id, "once")}>Allow this time</Button>
+          <Button size="sm" variant="secondary" disabled={!armed} onClick={() => answerPermission(id, "never")}>Never allow</Button>
         </div>
       </PopoverContent>
     </Popover>
   );
 }
 
-const STATES: Record<BrowserDownload["state"], string | null> = {
+const REFUSED_NAMES: Record<OsRefused, string> = { camera: "the camera", microphone: "the microphone", location: "location" };
+
+/**
+ * After a yes in the card: the system refused, or has off, what the person just allowed. The page hears the
+ * refusal too; this says why, and where to change it.
+ */
+export function OsRefusedNotice({
+  id,
+  refused,
+  anchor,
+}: {
+  id: string;
+  refused: { origin: string; refused: OsRefused[] } | null | undefined;
+  anchor: RefObject<HTMLDivElement | null>;
+}) {
+  const devices = refused?.refused ?? [];
+  const names = devices.map((device) => REFUSED_NAMES[device]).join(" and ");
+  const mac = useApp((s) => s.info?.platform === "macos");
+  return (
+    <Popover open={devices.length > 0} onOpenChange={(open) => { if (!open) closeOsRefused(id); }}>
+      <PopoverAnchor virtualRef={anchor as RefObject<HTMLDivElement>} />
+      <PopoverContent
+        align="start"
+        aria-label="The system refused a website permission"
+        data-slot="browser-permission-refused"
+        data-above-page
+        className="w-browser-site-info p-3"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
+      >
+        <div className="flex items-start gap-2">
+          <p className="text-browser min-w-0 flex-1 pt-1 break-words">{mac ? `macOS isn't giving Brigadier ${names}` : `Brigadier can't get ${names} on this system yet`}, so the site can't have it.</p>
+          <TooltipIconButton tooltip="Close" size="icon-xs" onClick={() => closeOsRefused(id)}>
+            <X />
+          </TooltipIconButton>
+        </div>
+        {mac && (
+          <Button className="mt-3 w-full" size="sm" variant="secondary" onClick={() => { if (devices[0]) void openOsPermissionSettings(devices[0]); closeOsRefused(id); }}>
+            Open System Settings
+          </Button>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+const STATES: Record<DownloadRecord["state"], string | null> = {
   running: "Downloading",
   done: null,
   failed: "Failed",
+  cancelled: "Cancelled",
 };
 
 /** How many of the newest downloads the popover lists. */
@@ -91,13 +150,14 @@ function failed(cause: unknown) {
  */
 export function DownloadsButton() {
   const mac = useApp((s) => s.info?.platform === "macos");
+  const profile = useFrontProfile().id;
   const finished = useBrowsers((s) => s.downloads);
   const [open, setOpen] = useState(false);
-  const [downloads, setDownloads] = useState<BrowserDownload[]>([]);
+  const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [read, setRead] = useState(0);
   useEffect(() => {
     let current = true;
-    browserDownloads("").then(
+    browserDownloads(profile, "").then(
       (found) => current && setDownloads(Array.isArray(found) ? found.slice(0, NEWEST) : []),
       () => {},
     );
@@ -106,7 +166,7 @@ export function DownloadsButton() {
     };
     // Read again as a download finishes and as the popover opens.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [finished, read]);
+  }, [profile, finished, read]);
   if (downloads.length === 0) return null;
   return (
     <Popover
@@ -132,13 +192,16 @@ export function DownloadsButton() {
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="text-browser truncate" title={download.path}>{name}</span>
                   <span className="text-muted-foreground truncate text-xs">
-                    {state ? `${state} · ` : ""}
+                    {download.state === "running" ? `${downloadProgress(download)} · ` : state ? `${state} · ` : ""}
                     {siteOf(download.url)}
                   </span>
                 </span>
+                {download.state === "running" && (
+                  <Button size="xs" variant="ghost" onClick={() => cancelDownload(profile, download.id).catch(failed)}>Cancel</Button>
+                )}
                 {download.state === "done" && (
                   <>
-                    <Button size="xs" variant="ghost" onClick={() => openDownload(download.id).catch(failed)}>Open</Button>
+                    <Button size="xs" variant="ghost" onClick={() => openDownload(profile, download.id).catch(failed)}>Open</Button>
                     <Button size="xs" variant="ghost" onClick={() => revealPath(download.path).catch(failed)}>
                       {mac ? "Show in Finder" : "Show in folder"}
                     </Button>
@@ -153,7 +216,7 @@ export function DownloadsButton() {
           type="button"
           onClick={() => {
             setOpen(false);
-            openBrowserSettings("downloads");
+            openBrowserSettings("downloads", profile);
           }}
           className="hover:bg-foreground/8 text-browser h-browser-menu-item flex w-full items-center rounded-capsule px-2"
         >

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mockIPC } from "@tauri-apps/api/mocks";
-import type { Channel } from "@tauri-apps/api/core";
+import { mockIPC } from "@/ipc/nativeMocks";
+import type { Channel } from "@/ipc/native";
 import type { BrowserEvent } from "@/ipc/generated";
 import { findState, openFind, useBrowserFind } from "./browserFind";
-import { answerPermission, closePage, faviconFits, openPage, originOf, useBrowsers } from "./browsers";
+import { answerPermission,
+  closeOsRefused, closePage, faviconFits, openPage, originOf, useBrowsers } from "./browsers";
 import { useApp } from "./store";
 import { type BrowserTabState, CHAT_TAB, restoreSessionTabs, sessionTabs, useSessionTabs } from "./sessionTabs";
 
@@ -95,6 +96,29 @@ test("a page's popup opens as a tab right after its opener's, in front; it close
     closePage(opener.id);
     closePage("browser:popup-1");
     useSessionTabs.setState({ sessions: {} });
+  }
+});
+
+test("a page's location question and the system's refusal reach the tab", async () => {
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { crypto: globalThis.crypto } });
+  const channels = new Map<string, Channel<BrowserEvent>>();
+  mockIPC((command, payload) => {
+    const args = payload as { id: string; events?: Channel<BrowserEvent> };
+    if (command === "browser_open") channels.set(args.id, args.events!);
+    return null;
+  });
+  try {
+    await openPage("maps", "https://maps.example/", { x: 0, y: 0, width: 800, height: 600 });
+    const page = channels.get("maps")!;
+    const asking = { request: 4, origin: "https://maps.example", camera: false, microphone: false, location: true };
+    page.onmessage({ type: "permission", ...asking });
+    assert.deepEqual(useBrowsers.getState().pages.maps?.asking, asking);
+    page.onmessage({ type: "permissionRefused", origin: "https://maps.example", refused: ["location"] });
+    assert.deepEqual(useBrowsers.getState().pages.maps?.osRefused, { origin: "https://maps.example", refused: ["location"] });
+    closeOsRefused("maps");
+    assert.equal(useBrowsers.getState().pages.maps?.osRefused, null);
+  } finally {
+    closePage("maps");
   }
 });
 

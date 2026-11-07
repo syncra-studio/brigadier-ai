@@ -40,7 +40,7 @@ test("browser tab tools: address suggestions, the page's question for the camera
     text: "meet.example wants toClose permission requestUse your cameraUse your microphoneAllow while visiting the siteAllow this timeNever allow",
     above: true,
     modal: false,
-    startAligned: 1,
+    startAligned: true,
     below: true,
     buttons: ["Close permission request", "Allow while visiting the site", "Allow this time", "Never allow"],
   });
@@ -59,6 +59,16 @@ test("browser tab tools: address suggestions, the page's question for the camera
     behindShown: false,
     asked: [{ permission: 12, answer: "once" }],
   }, "a question shows only over its own tab, and waits there unanswered");
+
+  // Location asks in the same card, and what the system refuses is named for the tab's own site.
+  assert.match(String(seen.locationAsked), /wants toClose permission requestKnow your locationAllow/);
+  assert.deepEqual(seen.osRefused, {
+    mac: "macOS isn't giving Brigadier location, so the site can't have it.CloseOpen System Settings",
+    settings: [{ settings: "location" }],
+    otherSite: false,
+    notMac: "Brigadier can't get location on this system yet, so the site can't have it.Close",
+    notMacButtons: ["Close"],
+  });
 
   // Downloads: Open and Show in Finder for a finished file, a failed one says so.
   assert.deepEqual(seen.downloads, ["report.pdffiles.testOpenShow in Finder", "big.zipFailed · files.test"]);

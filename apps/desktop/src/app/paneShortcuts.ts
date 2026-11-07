@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/ipc/native";
 import { useEffect } from "react";
 
 import { takePaneClose } from "@/state/closedPanes";

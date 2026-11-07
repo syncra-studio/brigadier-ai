@@ -8,14 +8,14 @@ import {
 } from "@/components/overlays";
 import { DotsHorizontal, Download, Folder, Trash } from "@/components/icons";
 import { revealPath } from "@/ipc/client";
-import type { BrowserDownload } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
-import { siteOf } from "@/state/browserData";
+import { downloadProgress, type DownloadRecord, siteOf } from "@/state/browserData";
 
-const STATES: Record<BrowserDownload["state"], string | null> = {
+const STATES: Record<DownloadRecord["state"], string | null> = {
   running: "Downloading",
   done: null,
   failed: "Failed",
+  cancelled: "Cancelled",
 };
 
 /**
@@ -26,11 +26,13 @@ export function DownloadRow({
   download,
   mac,
   onRemove,
+  onCancel,
   onError,
 }: {
-  download: BrowserDownload;
+  download: DownloadRecord;
   mac: boolean;
   onRemove: () => void;
+  onCancel: () => void;
   onError: (error: string) => void;
 }) {
   const name = download.path.split(/[\\/]/).pop() || download.path;
@@ -41,13 +43,24 @@ export function DownloadRow({
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="text-label truncate" title={download.path}>{name}</span>
         <span className="text-foreground/65 truncate text-xs">
-          {state ? `${state} · ` : ""}
+          {download.state === "running" ? `${state} · ${downloadProgress(download)} · ` : state ? `${state} · ` : ""}
           {siteOf(download.url)}
         </span>
+        {download.state === "running" && (
+          <progress
+            aria-label={`Progress of ${name}`}
+            className="mt-1 h-1 w-full"
+            max={download.totalBytes || 1}
+            {...(download.totalBytes ? { value: download.receivedBytes ?? 0 } : {})}
+          />
+        )}
       </span>
       <span className="text-foreground/65 shrink-0 text-xs tabular-nums">
         {formatTime(download.atMs)}
       </span>
+      {download.state === "running" && (
+        <Button type="button" variant="soft" size="sm" onClick={onCancel}>Cancel</Button>
+      )}
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <Button
@@ -71,10 +84,12 @@ export function DownloadRow({
               {mac ? "Reveal in Finder" : "Show in folder"}
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem variant="destructive" onSelect={onRemove}>
-            <Trash />
-            Remove from history
-          </DropdownMenuItem>
+          {download.state !== "running" && (
+            <DropdownMenuItem variant="destructive" onSelect={onRemove}>
+              <Trash />
+              Remove from history
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </li>

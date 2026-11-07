@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { ExternalStoreRuntimeCore } from "@assistant-ui/core/internal";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { clearMocks, mockIPC } from "@/ipc/nativeMocks";
 
 import type { RequestOf } from "@/ipc/client";
 import type { AttachmentRef } from "@/ipc/generated";

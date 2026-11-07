@@ -3,7 +3,7 @@
  * App), over a real daemon whose requests and frames `scripts/measure-open-speed.mjs` passes
  * through, as the live-refresh fixture's are. The script drives `select` and samples the frames.
  */
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { App } from "@/app/App";

@@ -534,6 +534,8 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "browser_screenshot" => ToolCall::Browser(B::Screenshot(arg(name, args))),
         "browser_close" => ToolCall::Browser(B::Close(arg(name, args))),
         "browser_show" => ToolCall::Browser(B::Show(arg(name, args))),
+        "browser_events" => ToolCall::Browser(B::Events(arg(name, args))),
+        "browser_eval" => ToolCall::Browser(B::Eval(arg(name, args))),
         other => panic!("the flow harness doesn't know the tool {other}"),
     }
 }

@@ -12,7 +12,7 @@
  *   turn, in view with its work folded, and no card above the composer (#506).
  */
 import "@/fixtures/cliView";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

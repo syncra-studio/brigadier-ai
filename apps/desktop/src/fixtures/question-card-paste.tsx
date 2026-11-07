@@ -1,5 +1,5 @@
 /** Real question card and composer; only IPC storage and answers are confined to this page. */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { fixtureInput } from "@/fixtures/input";
 import { setAsideCards } from "@/app/conversation/ActionCards";
 import type { AttachmentRef, Question, Request } from "@/ipc/generated";

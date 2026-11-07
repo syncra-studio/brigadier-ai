@@ -4,7 +4,7 @@
  * while its transition would run. ?drive=1 drives it and writes what it saw to
  * #tab-behind-result (TabBehindRender.test.ts reads it).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

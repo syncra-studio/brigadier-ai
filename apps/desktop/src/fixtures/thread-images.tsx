@@ -1,6 +1,6 @@
 /** Production image components over a synthetic daemon; ThreadImagesRender.test.ts reads #thread-images-result. */
 import { TextMessagePartProvider } from "@assistant-ui/react";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ImageTiles } from "@/app/conversation/activity/ImageRows";

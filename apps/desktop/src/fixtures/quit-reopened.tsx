@@ -5,7 +5,7 @@
  * request still cut), so Continue picks it up. IPC is mocked, no daemon. What the thread shows
  * goes to `<pre id="quit-reopened-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

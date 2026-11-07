@@ -8,7 +8,7 @@
  * message, through the same events the daemon sends, to see which rows move. ?drive=1 goes through
  * all of it and writes what it saw to #inbox-result (InboxRender.test.ts reads it).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

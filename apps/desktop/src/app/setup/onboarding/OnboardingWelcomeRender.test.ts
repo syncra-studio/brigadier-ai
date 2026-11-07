@@ -52,3 +52,10 @@ test("onboarding: the intro's canvas lets go of its buffers as it goes", { timeo
   const seen = JSON.parse(await renderFixtureLive(t, "onboarding-welcome.html?leave=1", "onboarding-leave-result", 20000)) as Record<string, unknown>;
   assert.deepEqual(seen, { drawn: true, mounted: false, size: [1, 1], lost: true });
 });
+
+// A canvas whose context goes before its first frame paints white with a sad face in Chromium, over a white
+// title: the intro's end shows on the shell's dark instead.
+test("onboarding: without its WebGL context the intro hides its canvas and shows its end", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "onboarding-welcome.html?lost=1", "onboarding-leave-result", 20000)) as Record<string, unknown>;
+  assert.deepEqual(seen, { settled: true, canvasShown: false, title: "Brigadier,at your command." });
+});

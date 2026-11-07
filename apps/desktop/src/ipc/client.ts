@@ -1,6 +1,4 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-
+import type { SignInStop } from "@/state/browserSignIn";
 import type {
   AppInfo,
   BridgeEvent,
@@ -21,6 +19,7 @@ import type {
   SmokeReport,
   UiMeasurements,
 } from "@/ipc/generated";
+import { invoke, listen, newChannel, type UnlistenFn } from "@/ipc/native";
 
 export type Method = Request["method"];
 export type RequestOf<M extends Method> = Extract<Request, { method: M }>;
@@ -67,7 +66,7 @@ export async function request<M extends Method>(
 export async function subscribe(
   onEvent: (event: BridgeEvent) => void,
 ): Promise<void> {
-  const channel = new Channel<BridgeEvent>(onEvent);
+  const channel = newChannel<BridgeEvent>(onEvent);
   await invoke("ipc_subscribe", { channel });
 }
 
@@ -276,9 +275,10 @@ export async function browserOpen(
   bounds: BrowserBounds,
   agent: boolean,
   onEvent: (event: BrowserEvent) => void,
+  restored = false,
 ): Promise<void> {
   try {
-    await invoke("browser_open", { id, url, bounds, agent, events: new Channel<BrowserEvent>(onEvent) });
+    await invoke("browser_open", { id, url, bounds, agent, restored, events: newChannel<BrowserEvent>(onEvent) });
   } catch (error) {
     throw isIpcError(error) ? new RequestError(error) : error;
   }
@@ -352,6 +352,9 @@ export function browserSnapshot(id: string): Promise<void> {
   return invoke("browser_snapshot", { id });
 }
 
+/** A Browser tab's activity: lines, the `since` of the next ask, and how many older lines are left out. */
+export type BrowserActivity = { lines: string[]; next: number; dropped: number };
+
 /** Runs the browser tool's script on the Browser tab `id`'s page with `op` (macOS): what the page answered. */
 export function browserAgent(id: string, op: Record<string, unknown>): Promise<unknown> {
   return invoke("browser_agent", { id, op });
@@ -367,6 +370,21 @@ export function browserAgentCapture(id: string): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>("browser_agent_capture", { id });
 }
 
+/** An agent has the Browser tab `id` or doesn't; `resumed`: it has it back from the user, with Continue. */
+export function browserAgentDrive(id: string, on: boolean, resumed = false): Promise<void> {
+  return invoke("browser_agent_drive", { id, on, resumed });
+}
+
+/** Whether the Browser tab `id`'s page is for the user alone: a sign-in or a captcha. The Electron shell's. */
+export function browserAgentSignInStop(id: string): Promise<SignInStop | null> {
+  return invoke<SignInStop | null>("browser_agent_sign_in_stop", { id });
+}
+
+/** What happened in the Browser tab `id` after `since`: its pages, network and console. */
+export function browserAgentEvents(id: string, since: number, kinds: readonly string[]): Promise<BrowserActivity> {
+  return invoke<BrowserActivity>("browser_agent_events", { id, since, kinds });
+}
+
 /** Gives the keyboard to the Browser tab `id`'s page, or with `null` back to the app's own. */
 export function browserFocus(id: string | null): Promise<void> {
   return invoke("browser_focus", { id });
@@ -378,12 +396,17 @@ export function browserConfigure(options: BrowserOptions): Promise<void> {
 }
 
 /**
- * Answers a Browser tab page's question `question` for the camera or microphone (macOS): `once`
- * for this request, `visiting` while the tab stays on the site, `never` saved for the site;
+ * Answers a Browser tab page's question `question` for the camera, microphone or location: `once`
+ * for this request, `visiting` saved as allowed for the site, `never` saved as blocked;
  * `dismiss` refuses this request only.
  */
 export function browserPermission(question: number, answer: "once" | "visiting" | "never" | "dismiss"): Promise<void> {
   return invoke("browser_permission", { request: question, answer });
+}
+
+/** Opens the system's privacy settings for what it refused a page. */
+export function browserPermissionSettings(device: "camera" | "microphone" | "location"): Promise<void> {
+  return invoke("browser_permission_settings", { device });
 }
 
 /** Drops the Browser tab's page (what it saved stays in the browser's store). */

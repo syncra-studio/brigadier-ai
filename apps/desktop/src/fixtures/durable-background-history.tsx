@@ -1,5 +1,5 @@
 /** Production history/output with synthetic daemon responses, including restart/clear evidence. */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { HistoryTab } from "@/app/side-panel/HistoryTab";

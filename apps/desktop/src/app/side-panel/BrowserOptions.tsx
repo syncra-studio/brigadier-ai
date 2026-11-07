@@ -6,7 +6,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { TooltipIconButton } from "@/components/controls";
 import { openSettings } from "@/state/actions";
 import { openBrowserSettings } from "@/state/browserSettings";
-import { useApp } from "@/state/store";
 
 /** The ⋯ menu's rows the page does natively (macOS), faint while there is no page to act on. */
 const NATIVE_ITEM = "data-[disabled]:opacity-40";
@@ -29,7 +28,6 @@ export function BrowserOptions({
   onPrint: () => void;
   onZoom: (zoom: number) => void;
 }) {
-  const mac = useApp((s) => s.info?.platform === "macos");
   // Find in page puts the keyboard in its field: the menu doesn't take it back to its button.
   const keepFocus = useRef(false);
   return (
@@ -97,7 +95,7 @@ export function BrowserOptions({
           </button>
         </div>
         <DropdownMenuSeparator className="mx-2" />
-        {mac && <DropdownMenuItem onSelect={() => openSettings("browserImport")}>Import Browser Data…</DropdownMenuItem>}
+        <DropdownMenuItem onSelect={() => openSettings("browserImport")}>Import Browser Data…</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => openBrowserSettings("downloads")}>Downloads</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => openBrowserSettings("history")}>History</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => openBrowserSettings("clear")}>Clear browsing data</DropdownMenuItem>

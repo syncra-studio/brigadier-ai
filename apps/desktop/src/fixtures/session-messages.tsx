@@ -6,7 +6,7 @@
  * a new message live. IPC is mocked, no daemon. What each shows goes to
  * `<pre id="session-messages-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

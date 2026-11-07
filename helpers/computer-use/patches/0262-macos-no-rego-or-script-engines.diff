@@ -1,0 +1,15 @@
+Why: The macOS backend asks for cua-driver-core without its Rego and QuickJS engines, keeping YAML policies, so an embedding app that never uses them can leave them out of its binary; Cargo unifies features, so one crate asking for the defaults would bring them back.
+
+diff --git a/crates/platform-macos/Cargo.toml b/crates/platform-macos/Cargo.toml
+index 8d429484a..002f24c0b 100644
+--- a/crates/platform-macos/Cargo.toml
++++ b/crates/platform-macos/Cargo.toml
+@@ -19,7 +19,7 @@ time = { workspace = true }
+ # Insertion-ordered map for the keyed per-session cursor render collection.
+ # IndexMap gives deterministic iteration order = stable cursor z-order frame
+ # to frame (a plain HashMap would flicker overlapping cursors).
+-cua-driver-core = { path = "../cua-driver-core" }
++cua-driver-core = { path = "../cua-driver-core", default-features = false, features = ["yaml"] }
+ cua-driver-contract = { path = "../cua-driver-contract" }
+ cursor-overlay = { path = "../cursor-overlay" }
+ pip-preview = { path = "../pip-preview" }

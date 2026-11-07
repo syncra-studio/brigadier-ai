@@ -1,4 +1,4 @@
-//! Safari: `Cookies.binarycookies` and `History.db`.
+//! Safari: `Cookies.binarycookies`, `History.db` and `Bookmarks.plist`.
 //!
 //! Apple doesn't document the binarycookies format; the layout here is the widely
 //! reverse-engineered one (a big-endian file header listing page sizes, little-endian pages of
@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 
 use crate::sqlite::{io_error, open_copy};
 use crate::{
-    APPLE_EPOCH_OFFSET_SECS, Cookie, Cookies, Error, Family, Profile, Visit, existing_app,
-    is_web_url, probe,
+    APPLE_EPOCH_OFFSET_SECS, Bookmark, BookmarkRoot, Bookmarks, Cookie, Cookies, Error, Family,
+    Profile, Visit, existing_app, is_web_url, probe,
 };
 
 /// The default profile's id.
@@ -30,6 +30,8 @@ const RECORD_HEADER: usize = 56;
 const FLAG_SECURE: u32 = 1;
 /// Cookie flag: HttpOnly.
 const FLAG_HTTP_ONLY: u32 = 4;
+/// Where Safari keeps a person's bookmarks; its later profiles share these.
+const BOOKMARKS_FILE: &str = "Bookmarks.plist";
 
 /// `~/Library/Containers/com.apple.Safari/Data/Library`.
 fn container(home: &Path) -> PathBuf {
@@ -58,6 +60,7 @@ pub(crate) fn discover(home: &Path, app_dirs: &[&Path]) -> Vec<Profile> {
         .find(|path| exists(path));
     let (has_cookies, cookies_readable) = cookie_file.as_deref().map_or((false, true), probe);
     let (has_history, history_readable) = probe(&safari_dir.join("History.db"));
+    let (has_bookmarks, _) = probe(&safari_dir.join(BOOKMARKS_FILE));
     profiles.push(Profile {
         id: DEFAULT_ID.to_owned(),
         browser: "Safari".to_owned(),
@@ -67,8 +70,11 @@ pub(crate) fn discover(home: &Path, app_dirs: &[&Path]) -> Vec<Profile> {
         app_path: app.clone(),
         keychain_service: None,
         keychain_account: None,
+        local_state: None,
+        linux_secret_application: None,
         has_cookies,
         has_history,
+        has_bookmarks,
         readable: (!has_cookies || cookies_readable) && (!has_history || history_readable),
         is_default: true,
     });
@@ -98,8 +104,11 @@ pub(crate) fn discover(home: &Path, app_dirs: &[&Path]) -> Vec<Profile> {
             app_path: app.clone(),
             keychain_service: None,
             keychain_account: None,
+            local_state: None,
+            linux_secret_application: None,
             has_cookies,
             has_history,
+            has_bookmarks: false,
             readable: (!has_cookies || cookies_readable) && (!has_history || history_readable),
             is_default: false,
             dir,
@@ -285,6 +294,7 @@ fn parse_record(record: &[u8]) -> Option<Cookie> {
         http_only: flags & FLAG_HTTP_ONLY != 0,
         // The classic layout records no SameSite.
         same_site: None,
+        source_insecure: false,
     })
 }
 
@@ -317,6 +327,100 @@ pub(crate) fn read_history(dir: &Path, limit: usize) -> Result<Vec<Visit>, Error
         }
     }
     Ok(visits)
+}
+
+/// Reads `Bookmarks.plist`: nested `WebBookmarkTypeList` folders of `WebBookmarkTypeLeaf` pages.
+/// The default profile's folder holds it; other profiles have none of their own.
+pub(crate) fn read_bookmarks(dir: &Path) -> Result<Bookmarks, Error> {
+    let path = dir.join(BOOKMARKS_FILE);
+    let data = std::fs::read(&path).map_err(|err| io_error(&path, err))?;
+    let tree = plist::Value::from_reader(std::io::Cursor::new(data))
+        .map_err(|err| Error::Format(format!("{BOOKMARKS_FILE}: {err}")))?;
+    let top = tree
+        .as_dictionary()
+        .and_then(|tree| tree.get("Children"))
+        .and_then(plist::Value::as_array)
+        .ok_or_else(|| Error::Format(format!("{BOOKMARKS_FILE}: no bookmarks")))?;
+
+    let mut out = Bookmarks::default();
+    for node in top {
+        let Some(dict) = node.as_dictionary() else {
+            continue;
+        };
+        let title = string_at(dict, "Title");
+        // Safari's own names for its fixed folders; anything else is one of the user's.
+        let (root, mut folders) = match (bookmark_kind(dict), title) {
+            (Some("WebBookmarkTypeList"), Some("BookmarksBar")) => (BookmarkRoot::Bar, vec![]),
+            (Some("WebBookmarkTypeList"), Some("BookmarksMenu")) => (BookmarkRoot::Menu, vec![]),
+            (Some("WebBookmarkTypeList"), Some("com.apple.ReadingList")) => {
+                (BookmarkRoot::Other, vec!["Reading List".to_owned()])
+            }
+            (Some("WebBookmarkTypeList"), title) => (
+                BookmarkRoot::Other,
+                vec![title.unwrap_or_default().to_owned()],
+            ),
+            _ => {
+                add_leaf(dict, BookmarkRoot::Other, &[], &mut out);
+                continue;
+            }
+        };
+        walk_bookmarks(dict, root, &mut folders, &mut out);
+    }
+    Ok(out)
+}
+
+fn bookmark_kind(node: &plist::Dictionary) -> Option<&str> {
+    string_at(node, "WebBookmarkType")
+}
+
+fn string_at<'a>(node: &'a plist::Dictionary, key: &str) -> Option<&'a str> {
+    node.get(key).and_then(plist::Value::as_string)
+}
+
+/// Collects the bookmarks under a folder.
+fn walk_bookmarks(
+    folder: &plist::Dictionary,
+    root: BookmarkRoot,
+    folders: &mut Vec<String>,
+    out: &mut Bookmarks,
+) {
+    let children = folder.get("Children").and_then(plist::Value::as_array);
+    for node in children.into_iter().flatten() {
+        let Some(node) = node.as_dictionary() else {
+            continue;
+        };
+        if bookmark_kind(node) == Some("WebBookmarkTypeList") {
+            folders.push(string_at(node, "Title").unwrap_or_default().to_owned());
+            walk_bookmarks(node, root, folders, out);
+            folders.pop();
+        } else {
+            add_leaf(node, root, folders, out);
+        }
+    }
+}
+
+/// Adds a page. Other node types, like the proxy Safari keeps for History, aren't bookmarks.
+fn add_leaf(node: &plist::Dictionary, root: BookmarkRoot, folders: &[String], out: &mut Bookmarks) {
+    if bookmark_kind(node) != Some("WebBookmarkTypeLeaf") {
+        return;
+    }
+    let Some(url) = string_at(node, "URLString").filter(|url| is_web_url(url)) else {
+        out.skipped += 1;
+        return;
+    };
+    let title = node
+        .get("URIDictionary")
+        .and_then(plist::Value::as_dictionary)
+        .and_then(|uri| string_at(uri, "title"))
+        .unwrap_or_default();
+    out.bookmarks.push(Bookmark {
+        url: url.to_owned(),
+        title: title.to_owned(),
+        root,
+        folders: folders.to_vec(),
+        // Safari records no date for an ordinary bookmark.
+        added_at_ms: None,
+    });
 }
 
 #[cfg(test)]

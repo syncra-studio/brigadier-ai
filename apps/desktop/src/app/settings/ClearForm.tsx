@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react";
 
+import { ProfilePicker } from "@/app/settings/ProfilePicker";
 import { TickRow } from "@/app/settings/TickRow";
 import { errorText } from "@/app/shell/dialogs/fields";
 import { Button, Segmented, ErrorLine } from "@/components/controls";
@@ -8,6 +9,7 @@ import { Download, Globe, Images, SettingsCog, Trash } from "@/components/icons"
 import { SettingsCard } from "@/components/shared";
 import type { BrowserClear } from "@/ipc/generated";
 import { clearBrowsingData, type ClearRange, rangeStart, siteDataCount } from "@/state/browserData";
+import { reloadProfileTabs } from "@/state/browserProfiles";
 
 const RANGES = [
   { value: "hour", label: "Last hour" },
@@ -19,7 +21,7 @@ const RANGES = [
 
 type Kind = "history" | "cookies" | "cache" | "downloads" | "sites";
 
-/** Picked when the dialog opens: everything but the sites' camera and microphone choices. */
+/** Picked when the dialog opens: everything but the sites' camera, microphone and location choices. */
 const PICKED: Record<Kind, boolean> = { history: true, cookies: true, cache: true, downloads: true, sites: false };
 
 function sitesLine(count: number | null | undefined): string {
@@ -33,37 +35,41 @@ function sitesLine(count: number | null | undefined): string {
  * `clearing` is held by the dialog, which can't close while it is on.
  */
 export function ClearForm({
+  profile: opened,
   siteData,
   clearing,
   setClearing,
   onDone,
   onCancel,
 }: {
+  /** The profile it starts on. */
+  profile: string;
   siteData: boolean;
   clearing: boolean;
   setClearing: (clearing: boolean) => void;
   onDone: () => void;
   onCancel: () => void;
 }) {
+  const [profile, setProfile] = useState(opened);
   const [range, setRange] = useState<ClearRange>("hour");
   const [picked, setPicked] = useState(PICKED);
   const [sites, setSites] = useState<number | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (siteData) siteDataCount().then(setSites, () => setSites(null));
-  }, [siteData]);
+    if (siteData) siteDataCount(profile).then(setSites, () => setSites(null));
+  }, [siteData, profile]);
 
   const kinds: { kind: Kind; icon: ReactNode; label: string; detail: string }[] = [
     { kind: "history", icon: <Globe />, label: "Browsing history", detail: "The pages you visited." },
     ...(siteData
       ? [
           { kind: "cookies" as const, icon: <Trash />, label: "Cookies and site data", detail: sitesLine(sites) },
-          { kind: "cache" as const, icon: <Images />, label: "Cached images and files", detail: "Pages may load more slowly the next time." },
+          { kind: "cache" as const, icon: <Images />, label: "Cached images and files", detail: "All of it, whatever the time range. Pages may load more slowly the next time." },
         ]
       : []),
     { kind: "downloads", icon: <Download />, label: "Download history", detail: "The list only; downloaded files stay." },
-    { kind: "sites", icon: <SettingsCog />, label: "Site settings", detail: "Which sites may use your camera and microphone." },
+    { kind: "sites", icon: <SettingsCog />, label: "Site settings", detail: "Which sites may use your camera, microphone and location." },
   ];
   const any = kinds.some(({ kind }) => picked[kind]);
 
@@ -78,8 +84,9 @@ export function ClearForm({
     };
     setClearing(true);
     setError(null);
-    clearBrowsingData(request)
+    clearBrowsingData(profile, request)
       .then(() => {
+        if (request.cookies) reloadProfileTabs(profile);
         setClearing(false);
         onDone();
       })
@@ -91,6 +98,7 @@ export function ClearForm({
 
   return (
     <>
+      <ProfilePicker value={profile} onChange={setProfile} />
       <Segmented label="Time range" value={range} options={RANGES} onChange={setRange} />
       <SettingsCard inset>
         {kinds.map(({ kind, icon, label, detail }) => (
@@ -104,6 +112,7 @@ export function ClearForm({
           />
         ))}
       </SettingsCard>
+      <p className="text-foreground/65 text-xs">Saved passwords and bookmarks are kept. Other profiles aren't touched.</p>
       <ErrorLine error={error} />
       <DialogFooter>
         <Button type="button" variant="ghost" disabled={clearing} onClick={onCancel}>

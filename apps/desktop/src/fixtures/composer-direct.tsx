@@ -8,7 +8,7 @@
  * queued message is pulled into the composer, and leaving the session takes it away. What it
  * saw goes as JSON into `<pre id="composer-direct-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

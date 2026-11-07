@@ -4,7 +4,7 @@
  * by `scripts/measure-live-refresh.mjs`, which writes the files and times the frames.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { type ComposerTarget, ComposerTargetContext } from "@/app/conversation/composerTarget";

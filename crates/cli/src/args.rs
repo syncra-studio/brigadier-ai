@@ -703,6 +703,9 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
                 "open" => {
                     put("url", one("url", true)?);
                     put("keep", Some(json!(args.switch("keep"))));
+                    if args.switch("dev-url") {
+                        put("dev_url", Some(json!(true)));
+                    }
                 }
                 "navigate" => match (one("url", false)?, args.flag("go")) {
                     (Some(_), Some(_)) => return Err(error("a URL or --go, not both")),
@@ -724,6 +727,22 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
                     put("text", Some(json!(typed.join(" "))));
                     put("submit", Some(json!(args.switch("submit"))));
                     put("asks", asks);
+                }
+                "eval" => {
+                    if words.is_empty() {
+                        return Err(error("missing <script>"));
+                    }
+                    put("script", Some(json!(words.join(" "))));
+                }
+                "events" => {
+                    one("nothing", false)?.map_or(Ok(()), |extra| {
+                        Err(error(&format!("unexpected argument {extra}")))
+                    })?;
+                    put("since", number("since"));
+                    if let Some(kinds) = args.flag("kinds") {
+                        let kinds: Vec<&str> = kinds.split(',').map(str::trim).collect();
+                        put("kinds", Some(json!(kinds)));
+                    }
                 }
                 _ => {
                     one("nothing", false)?.map_or(Ok(()), |extra| {
@@ -1472,6 +1491,17 @@ mod tests {
         assert_eq!(
             tool(&["browser", "open", "https://example.com"]).2,
             json!({"url": "https://example.com", "keep": false})
+        );
+        assert_eq!(
+            tool(&[
+                "browser",
+                "open",
+                "http://localhost:1/",
+                "--keep",
+                "--dev-url"
+            ])
+            .2,
+            json!({"url": "http://localhost:1/", "keep": true, "dev_url": true})
         );
         assert_eq!(
             tool(&["browser", "navigate", "--tab", "t", "--go", "back"]).2,

@@ -4,7 +4,7 @@
  * behind its tab pauses nothing. ?drive=1 drives it
  * and writes what it saw to #agent-paused-result (AgentPausedRender.test.ts reads it).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

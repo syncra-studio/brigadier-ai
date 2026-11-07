@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/ipc/native";
 import { useEffect, useSyncExternalStore } from "react";
 
 import type { ComputerPermission, ComputerSession, ComputerUseStatus } from "@/ipc/generated";

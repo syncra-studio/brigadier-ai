@@ -5,7 +5,7 @@
  * (OnboardingProjectsRender.test.ts reads it). ?many=1 finds a dozen projects, for screenshots;
  * ?mac=1 reads as on a Mac.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

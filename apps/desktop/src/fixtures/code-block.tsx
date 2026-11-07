@@ -9,7 +9,7 @@
  * animations and transitions off: a tab in the background never runs them, so a screenshot of it
  * would show them at their first frame.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

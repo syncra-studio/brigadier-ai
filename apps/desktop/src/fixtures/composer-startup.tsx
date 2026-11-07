@@ -5,7 +5,7 @@
  * editor takes the field's place and it is measured again; then another new chat's composer
  * mounts, as a switch draws it, and a rail item comes a while after its rail. What it saw goes as JSON into `<pre id="composer-startup-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

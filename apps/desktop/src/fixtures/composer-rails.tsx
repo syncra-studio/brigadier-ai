@@ -8,7 +8,7 @@
  * and writes what it saw as JSON into
  * `#composer-rails-result`; `ComposerRailsRender.test.ts` checks it. IPC stays mocked.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { type FC, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

@@ -14,9 +14,10 @@
 //! the tab closes. Linux has no embedded page (Tauri's window there is a GTK box a child can't
 //! be laid over); its tab opens pages in the system browser.
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
 
 use brigadier_ipc::app::{
     BrowserBounds, BrowserClear, BrowserDownload, BrowserEvent, BrowserFound, BrowserOptions,
@@ -1056,6 +1057,7 @@ pub(crate) mod embedded {
                         origin,
                         camera,
                         microphone,
+                        location: false,
                     });
                 }
             }
@@ -1169,17 +1171,9 @@ mod embedded {
 
 /// The built-in browser's own folder in Brigadier's data folder, set once at start: its saved
 /// store is named from it, and its history kept in it.
-static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
-
-/// Keeps the browser's saved data with Brigadier's data folder `data_dir`.
-pub fn set_data_dir(data_dir: &Path) {
-    let _ = DATA_DIR.set(data_dir.join("browser"));
-}
-
-/// The browser's folder, once the app has set it.
-pub fn data_dir() -> Option<&'static Path> {
-    DATA_DIR.get().map(PathBuf::as_path)
-}
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub use brigadier_shell_native::browser_store::data_dir;
+pub use brigadier_shell_native::browser_store::set_data_dir;
 
 /// The WebKit data store that holds the pages' cookies and site data for the browser folder
 /// `dir`: the same folder always gets the same store, and another (a test app's) never shares it.

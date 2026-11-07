@@ -4,7 +4,7 @@
  * brings its closing words. One already over while its lead's turn still runs (the session's
  * thread not read again yet) shows its transcript too, read as its panel opens.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

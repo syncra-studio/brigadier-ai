@@ -3,7 +3,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import type { Conversation, Environment, Project } from "@/ipc/generated";
 import { cachedWorkspace, checkoutKey, emitWorkspaceChanged, keepSource, onWorkspaceChanged, prefetchWorkspace, readFiles, readSource, readUserWorktrees, refreshSource, remembered, watchTargets, workspaceKey } from "./workspaceCache";
 
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { clearMocks, mockIPC } from "@/ipc/nativeMocks";
 import { useApp } from "@/state/store";
 
 const session = (environment: Environment, lifecycle: Conversation["lifecycle"] = "active") => ({

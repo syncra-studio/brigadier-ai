@@ -4,8 +4,14 @@ import { AddressSuggestions, useAddressSuggestions } from "./AddressSuggestions"
 import { type Suggestion, stepSuggestion } from "./browserSuggestions";
 import { browserAddress, shownAddress, webAddress } from "./browserAddress";
 import { showPage } from "../conversation/browserLayer";
+import { followLayout } from "../conversation/pageWatch";
 import { type BrowserKey, browserKey, stepZoom } from "../conversation/browserKeys";
-import { DownloadsButton, PermissionPrompt } from "./BrowserToolbarPopovers";
+import { DownloadsButton, OsRefusedNotice, PermissionPrompt } from "./BrowserToolbarPopovers";
+import { ProfileButton } from "./ProfileButton";
+import { BookmarkStar } from "./BookmarkStar";
+import { BrowserPasswordsPrompts } from "@/app/settings/BrowserPasswordsPrompts";
+import { BrowserDevButton, BrowserDevFrame, BrowserPickerBar } from "./BrowserDevTools";
+import { BrowserDeviceBar } from "./BrowserDeviceSizes";
 import { BrowserOptions } from "./BrowserOptions";
 import { FindBar } from "./FindBar";
 import { NavigationCapsule } from "./NavigationCapsule";
@@ -23,11 +29,15 @@ import type { BrowserBounds } from "@/ipc/generated";
 import { closeFind, findInPage, NO_FIND, openFind, useBrowserFind } from "@/state/browserFind";
 import {
   dismissBlocked,
+  dismissPasskeyRefused,
   openPage,
+  syncZoom,
   useBrowsers,
   zoomPage,
+  originOf,
 } from "@/state/browsers";
 import { handBack, pageShows, useAgentPause, userUsed } from "@/state/agentPause";
+import { dismissSignInRejected, type SignInStop, useSignInRejected } from "@/state/browserSignIn";
 import { useBrowserOn } from "@/state/links";
 import { selectTab, sessionWith, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -62,16 +72,18 @@ function covered(area: DOMRect, layers: readonly Element[]): boolean {
   });
 }
 
+/** The floating editor over this tab's pane, if there is one. */
+function composerOf(element: HTMLElement): Element | null {
+  return element.closest('[data-slot="pane-workspace"]')?.querySelector('[data-slot="floating-composer"]') ?? null;
+}
+
 function pageBounds(
   element: HTMLElement,
   rect = element.getBoundingClientRect(),
 ): BrowserBounds {
   // A native child webview paints above the app DOM. End its rectangle above the
   // floating editor, so the same editor stays accessible without a second webview.
-  const composer = element
-    .closest('[data-slot="pane-workspace"]')
-    ?.querySelector('[data-slot="floating-composer"]')
-    ?.getBoundingClientRect();
+  const composer = composerOf(element)?.getBoundingClientRect();
   return {
     x: rect.left,
     y: rect.top,
@@ -87,6 +99,15 @@ function failed(cause: unknown) {
   toast(cause instanceof Error ? cause.message : String(cause), {
     tone: "error",
   });
+}
+
+/** Why a tab's agent stopped for the user at a page only they can go through. */
+function SignInStopWords({ stop, driver }: { stop: SignInStop; driver: string }) {
+  const who = <span className="font-medium">{driver}</span>;
+  if (stop.kind === "rejected") return <>Google refused this sign-in, so {who} stopped. Press Continue to hand the page back.</>;
+  if (stop.kind === "captcha") return <>This page shows a captcha, so {who} stopped. Solve it, then press Continue.</>;
+  if (stop.window) return <>A sign-in window opened, so {who} stopped. Finish in that window, then press Continue.</>;
+  return <>This page asks you to sign in, so {who} stopped. Agents don't sign in: do it here, then press Continue.</>;
 }
 
 function openOutside(url: string) {
@@ -127,6 +148,9 @@ export function BrowserTab({
 }) {
   const page = useBrowsers((s) => s.pages[conversationId]);
   const paused = useAgentPause((s) => conversationId in s.paused);
+  const devtoolsOpen = useAgentPause((s) => conversationId in s.devtools);
+  const signInStop = useAgentPause((s) => s.asked[conversationId]);
+  const signInRejected = useSignInRejected((s) => conversationId in s);
   const driver = useSessionTabs((s) => driverLabel(s.sessions, conversationId));
   const embedded = useApp((s) => s.info?.platform !== "linux");
   const mac = useApp((s) => s.info?.platform === "macos");
@@ -162,16 +186,8 @@ export function BrowserTab({
     const element = area.current;
     if (!page?.ready || !element) return;
     if (!active) { void browserPlace(conversationId, null).catch(() => {}); return; }
-    let layers: Element[] = [];
-    const collect = () => {
-      layers = [...document.querySelectorAll(COVERS)];
-    };
-    collect();
-    // Menus, popovers and dialogs mount in portals at the end of the body.
-    const observer = new MutationObserver(collect);
-    observer.observe(document.body, { childList: true });
     let placed = "";
-    let next = 0;
+    let showed: boolean | null = null;
     // The side panel clips its contents while it opens, closes or hides; the page, drawn over
     // the window rather than in it, shows only once the tab is wholly in view.
 
@@ -190,7 +206,7 @@ export function BrowserTab({
         !element.closest("[inert]") &&
         placedBounds.width > 0 &&
         placedBounds.height > 0 &&
-        (beneath || !covered(rendered, layers))
+        (beneath || !covered(rendered, [...document.querySelectorAll(COVERS)]))
           ? placedBounds
           : null;
       const key = JSON.stringify(bounds);
@@ -200,13 +216,14 @@ export function BrowserTab({
         if (beneath) showPage(conversationId, bounds);
       }
       shown.current = bounds !== null;
-      pageShows(conversationId, shown.current);
-      next = requestAnimationFrame(place);
+      if (shown.current !== showed) {
+        showed = shown.current;
+        pageShows(conversationId, showed);
+      }
     };
-    next = requestAnimationFrame(place);
+    const stop = followLayout(() => [element, composerOf(element)], place);
     return () => {
-      cancelAnimationFrame(next);
-      observer.disconnect();
+      stop();
       shown.current = false;
       pageShows(conversationId, false);
       browserPlace(conversationId, null).catch(() => {});
@@ -220,9 +237,16 @@ export function BrowserTab({
   // What the page does natively (find, print, zoom, a screenshot): macOS, once there is a page.
   const native = mac && page?.ready === true;
 
+  useEffect(() => { if (active && native) syncZoom(conversationId); }, [active, native, conversationId]);
+
   const act = (action: Parameters<typeof browserGo>[1]) => {
     userUsed(conversationId);
     browserGo(conversationId, action).catch(failed);
+  };
+
+  /** A click on the toolbar took the keyboard from the page; it goes back, so the page can be used at once. */
+  const keyboardToPage = () => {
+    browserFocus(conversationId).catch(() => {});
   };
 
   /** Waits (up to 2s) for the page to show over the tab again, as once the ⋯ menu has gone. */
@@ -253,6 +277,7 @@ export function BrowserTab({
     void whenShown().then(() => browserPrint(conversationId)).catch(failed);
   };
   const screenshot = () => {
+    keyboardToPage();
     void whenShown()
       .then(() => browserSnapshot(conversationId))
       .then(() => toast("Screenshot saved to clipboard"), failed);
@@ -345,9 +370,11 @@ export function BrowserTab({
       openUrl(to).catch(failed);
       return;
     }
-    if (onNavigate) { onNavigate(to); return; }
+    // Reading the page comes next, as in any browser.
+    if (onNavigate) { onNavigate(to); keyboardToPage(); return; }
     if (!area.current) return;
     openPage(conversationId, to, pageBounds(area.current), agent).catch(failed);
+    keyboardToPage();
   };
   const editing = focused || typed !== null;
   const suggestions = useAddressSuggestions(conversationId, focused ? typed : null);
@@ -369,7 +396,14 @@ export function BrowserTab({
   return (
     <div data-pane="browser" data-active={active || undefined} className="@container/new-tab flex min-h-0 flex-1 flex-col">
       <div data-slot="browser-toolbar" className="@container/browser-toolbar border-border flex h-12 shrink-0 items-center gap-1.5 border-b p-2">
-        <NavigationCapsule disabled={!embedded || !made} loading={loading} onAct={act} />
+        <NavigationCapsule
+          disabled={!embedded || !made}
+          // A shell that doesn't say what the history allows leaves both on (see `BrowserEvent`).
+          canGoBack={page?.canGoBack !== false}
+          canGoForward={page?.canGoForward !== false}
+          loading={loading}
+          onAct={(action) => { act(action); keyboardToPage(); }}
+        />
         <form
           className="flex min-w-0 flex-1 justify-center px-1 @max-sm/browser-toolbar:px-0"
           onSubmit={(event) => {
@@ -386,9 +420,10 @@ export function BrowserTab({
             {!editing && <SiteInfo url={url} />}
             <input
               ref={field}
-              // ⌘T opens the tab to type an address at once.
+              // ⌘T opens the tab to type an address at once. A tab with an address has its page coming:
+              // Return in a New tab mounts this anew, and the keyboard is on its way to the page.
               // oxlint-disable-next-line jsx-a11y/no-autofocus
-              autoFocus={active && !made}
+              autoFocus={active && !made && !initialUrl}
               value={typed ?? (focused ? url : shownAddress(url, fullUrl))}
               placeholder="Search or enter a URL"
               aria-label="Address"
@@ -407,7 +442,8 @@ export function BrowserTab({
                 setFocused(true);
                 // The whole URL replaces the site first, then is selected.
                 const input = event.target;
-                requestAnimationFrame(() => input.select());
+                // select() also focuses: by the next frame Return may have sent the keyboard to the page.
+                requestAnimationFrame(() => { if (document.activeElement === input) input.select(); });
               }}
               onBlur={() => {
                 setFocused(false);
@@ -443,6 +479,7 @@ export function BrowserTab({
                 focused ? "text-start" : "text-center",
               )}
             />
+            {!editing && embedded && <BookmarkStar tab={conversationId} url={url} title={page?.title ?? ""} />}
             {outside && (url || typed !== null) && (
               <TooltipIconButton
                 type="button"
@@ -470,7 +507,9 @@ export function BrowserTab({
           />
           {/* Only over its own tab: a question waits, unanswered, while another tab is in front. */}
           {embedded && <PermissionPrompt id={conversationId} asking={active ? page?.asking : null} anchor={address} />}
+          {embedded && <OsRefusedNotice id={conversationId} refused={active && page?.osRefused?.origin === originOf(page?.url ?? "") ? page?.osRefused : null} anchor={address} />}
         </form>
+        {embedded && <ProfileButton />}
         {embedded && <DownloadsButton />}
         {mac && (
           <TooltipIconButton
@@ -483,6 +522,7 @@ export function BrowserTab({
             <CameraPhoto />
           </TooltipIconButton>
         )}
+        <BrowserDevButton id={conversationId} ready={page?.ready === true} />
         <BrowserOptions
           native={native}
           zoom={zoom}
@@ -496,12 +536,36 @@ export function BrowserTab({
       {paused && driver !== null && (
         <Banner
           data-slot="browser-paused"
-          text={<>You're using this page, so <span className="font-medium">{driver}</span> is waiting.</>}
+          text={devtoolsOpen
+            ? <>DevTools is open on this page, so <span className="font-medium">{driver}</span> is waiting. Close it to hand the page back.</>
+            : signInStop
+              ? <SignInStopWords stop={signInStop} driver={driver} />
+              : <>You're using this page, so <span className="font-medium">{driver}</span> is waiting.</>}
         >
-          <Button size="sm" onClick={() => handBack(conversationId)}>
+          <Button size="sm" disabled={devtoolsOpen} onClick={() => handBack(conversationId)}>
             Continue
           </Button>
         </Banner>
+      )}
+      {signInRejected && (
+        <Banner
+          data-slot="browser-signin-rejected"
+          text={<><span className="font-medium">Google refused this sign-in.</span> It decides which browsers it allows and has decided against this one. Your account and password are fine, but trying again here will probably get the same answer. Use your usual browser for this site if you need it now.</>}
+          onDismiss={() => dismissSignInRejected(conversationId)}
+        >
+          <Button size="sm" variant="ghost" onClick={() => openOutside("https://accounts.google.com/")}>
+            Open in browser
+          </Button>
+        </Banner>
+      )}
+      <BrowserPickerBar id={conversationId} />
+      <BrowserDeviceBar id={conversationId} />
+      {page?.passkeyRefused && (
+        <Banner
+          data-slot="browser-passkey"
+          text={<>Passkeys don't work in Brigadier yet, so this page's request was refused. Sign in with a password or another option on the page.</>}
+          onDismiss={() => dismissPasskeyRefused(conversationId)}
+        />
       )}
       {page?.blocked && (
         <Banner
@@ -515,11 +579,13 @@ export function BrowserTab({
           )}
         </Banner>
       )}
+      <BrowserDevFrame id={conversationId} active={active}>
       <div
         ref={area}
         data-slot="browser-page"
         className="flex min-h-0 w-full flex-1"
       >
+        {embedded && active && <BrowserPasswordsPrompts tab={conversationId} anchor={area} />}
         {!made && (children ?? (
           <div className="text-muted-foreground m-auto p-6 text-center text-sm">
             <Globe aria-hidden className="mx-auto mb-3 size-6" />
@@ -528,6 +594,7 @@ export function BrowserTab({
           </div>
         ))}
       </div>
+      </BrowserDevFrame>
     </div>
   );
 }

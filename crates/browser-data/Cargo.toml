@@ -1,6 +1,6 @@
 [package]
 name = "brigadier-browser-data"
-description = "Finds other browsers' profiles and reads their cookies and history, once, for import."
+description = "Finds other browsers' profiles and reads their cookies, history and bookmarks, once, for import."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,16 @@ publish.workspace = true
 
 [dependencies]
 aes = "0.9"
+# Chromium on Windows seals `v10` cookies with AES-256-GCM. Pure Rust, and kept on every OS so
+# that the same read path runs in tests here too.
+aes-gcm = "0.10"
+# `Local State` keeps Chromium's master key as base64; Firefox's logins.json its passwords.
+base64.workspace = true
 cbc = { version = "0.2", features = ["alloc"] }
+# Firefox seals saved passwords with Triple DES, or AES on newer profiles.
+des = "0.9"
+# Firefox's oldest key format derives its key by hand from HMAC-SHA1.
+hmac = "0.13"
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 plist = "1.10"
 rusqlite = { workspace = true, features = ["backup"] }
@@ -24,8 +33,21 @@ tracing.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7.0"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Asks the Secret Service for Chromium's `v11` password. Pure Rust, unlike libsecret, which would
+# need a system library to build; and unlike `secret-tool`, which many distros don't install,
+# its replies tell a locked keyring from a missing one.
+zbus = "5"
+
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[target.'cfg(unix)'.dev-dependencies]
+# A fake Secret Service over a socket pair, so the Linux client's calls run on any Unix.
+zbus = { version = "5", features = ["p2p"] }
 
 [lints]
 workspace = true

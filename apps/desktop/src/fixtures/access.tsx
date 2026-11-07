@@ -7,7 +7,7 @@
  * Full access confirmation), and writes what it saw to #access-result
  * (ConfigurationPageRender.test.ts reads it).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

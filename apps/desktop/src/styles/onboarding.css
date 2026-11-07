@@ -23,6 +23,11 @@
   transition: opacity var(--intro-to-name) var(--intro-ease);
 }
 
+/* Without WebGL there's nothing to draw: the shell's dark shows, and the title on it. */
+.welcome-canvas[data-unavailable] {
+  display: none;
+}
+
 /* Continuing, then behind the name, the waves fade out (then go), leaving the same dark; the
    title and its button fade out first. */
 .welcome:is([data-leaving], [data-step="name"]) .welcome-canvas {

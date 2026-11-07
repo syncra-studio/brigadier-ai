@@ -62,7 +62,22 @@ pub struct Terminals {
     ///
     /// [`CliEnv::installer_folder`]: brigadier_providers::CliEnv::installer_folder
     agent_folders: Vec<PathBuf>,
+    /// What this app's shells' `BROWSER` proves itself with: printing a thing to a terminal
+    /// shouldn't open pages.
+    open_token: String,
 }
+
+/// `BROWSER` in the user's shells, for `vite --open` and the like: a local address opens in the
+/// app, asked for on the terminal itself so it goes to the session the terminal is in; anything
+/// else in the default browser.
+const BROWSER_SHIM: &str = r#"#!/bin/sh
+case "$1" in
+  http://localhost*|https://localhost*|http://127.*|https://127.*|http://0.0.0.0*|http://\[::1\]*|http://*.localhost*)
+    if [ -n "$BRIGADIER_OPEN_TOKEN" ] && printf '\033]7733;%s;%s\007' "$BRIGADIER_OPEN_TOKEN" "$1" 2>/dev/null >/dev/tty; then exit 0; fi ;;
+esac
+if command -v open >/dev/null 2>&1; then exec open "$1"; fi
+exec xdg-open "$1"
+"#;
 
 struct Terminal {
     id: String,
@@ -99,6 +114,7 @@ impl Terminal {
             shell: self.shell.clone(),
             cwd: self.cwd.clone(),
             scrollback: lock(&self.scrollback).clone(),
+            open_token: String::new(),
         }
     }
 
@@ -178,6 +194,30 @@ impl Terminals {
             kept: Mutex::new(HashMap::new()),
             platform: None,
             agent_folders: Vec::new(),
+            open_token: uuid::Uuid::new_v4().to_string(),
+        }
+    }
+
+    /// Gives the shell `command` the app's `BROWSER`, unless the user chose their own. A shell
+    /// without it still works, so a failure here isn't one of the terminal's.
+    fn browser_env(&self, command: &mut CommandBuilder) {
+        if !cfg!(unix) || std::env::var_os("BROWSER").is_some() {
+            return;
+        }
+        let folder = std::env::temp_dir().join(format!("brigadier-open-{}", std::process::id()));
+        let shim = folder.join("browser");
+        let written = std::fs::create_dir_all(&folder).and_then(|()| {
+            std::fs::write(&shim, BROWSER_SHIM)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o700))?;
+            }
+            Ok(())
+        });
+        if written.is_ok() {
+            command.env("BROWSER", shim);
+            command.env("BRIGADIER_OPEN_TOKEN", &self.open_token);
         }
     }
 
@@ -238,7 +278,10 @@ impl Terminals {
             if let Err(err) = lock(&terminal.master).resize(size) {
                 tracing::debug!(terminal = %terminal.id, error = %err, "resize failed");
             }
-            return Ok(terminal.info());
+            return Ok(TerminalInfo {
+                open_token: self.open_token.clone(),
+                ..terminal.info()
+            });
         }
 
         // Reattaching above does not need the original folder to still exist.
@@ -255,6 +298,7 @@ impl Terminals {
         }
         command.cwd(&cwd);
         clean_native_environment(&mut command);
+        self.browser_env(&mut command);
         // The builder's PATH is the system's and the user's from the registry, read now.
         if cfg!(windows)
             && let Some(path) = with_folders(command.get_env("PATH"), &self.agent_folders)
@@ -271,6 +315,7 @@ impl Terminals {
         // before opening it; sending it here too would show it twice.
         Ok(TerminalInfo {
             scrollback: kept,
+            open_token: self.open_token.clone(),
             ..terminal.info()
         })
     }
@@ -423,6 +468,7 @@ impl Terminals {
             shell: terminal.shell.clone(),
             cwd: terminal.cwd.clone(),
             scrollback: scrollback.clone(),
+            open_token: self.open_token.clone(),
         };
         Ok((info, others))
     }
@@ -925,6 +971,31 @@ mod tests {
 
     /// A folder in the temp directory, removed when dropped however the test ends.
     struct Temp(PathBuf);
+
+    #[cfg(unix)]
+    #[test]
+    fn a_shell_s_browser_is_the_shim_with_the_apps_token_unless_the_user_chose_their_own() {
+        let terminals = Terminals::new();
+        let mut command = portable_pty::CommandBuilder::new("/bin/sh");
+        command.env_remove("BROWSER");
+        terminals.browser_env(&mut command);
+        let own = std::env::var_os("BROWSER").is_some();
+        let token = command.get_env("BRIGADIER_OPEN_TOKEN");
+        if own {
+            assert!(token.is_none());
+            return;
+        }
+        assert_eq!(
+            token.and_then(|token| token.to_str()),
+            Some(terminals.open_token.as_str())
+        );
+        assert!(!terminals.open_token.is_empty());
+        let shim = command.get_env("BROWSER").unwrap();
+        let body = std::fs::read_to_string(shim).unwrap();
+        assert_eq!(body, super::BROWSER_SHIM);
+        assert!(body.contains("7733"), "{body}");
+        assert_ne!(Terminals::new().open_token, terminals.open_token);
+    }
 
     impl std::ops::Deref for Temp {
         type Target = Path;

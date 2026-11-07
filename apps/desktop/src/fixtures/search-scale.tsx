@@ -3,7 +3,7 @@
  * streamed in its batches (64 files every 50 ms). `scripts/measure-search-scale.mjs` times the
  * results showing, the view opening again on them, and scrolling through them.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

@@ -5,7 +5,7 @@
  * the Stop hook sent back once (harness D49) asks on the card and ends in an empty reply (D58).
  * IPC is mocked, no daemon. What the turn shows goes to `<pre id="reloaded-turn-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

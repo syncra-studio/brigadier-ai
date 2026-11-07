@@ -3,7 +3,7 @@
  * records the calls, no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import type { ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 

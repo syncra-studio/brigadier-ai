@@ -1,12 +1,17 @@
 import {
+  type BrowserActivity,
   browserAgent,
   browserAgentCapture,
+  browserAgentDrive,
+  browserAgentEvents,
   browserAgentLoad,
+  browserAgentSignInStop,
   browserGo,
 } from "@/ipc/client";
 import type { AppCall, BrowserBounds, BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult, BrowserSensitive } from "@/ipc/generated";
-import { isPaused } from "@/state/agentPause";
+import { devToolsOpen, driverOf, isPaused, useAgentPause } from "@/state/agentPause";
 import { openPage, useBrowsers } from "@/state/browsers";
+import { askedOf, signInCleared, type SignInStop, stopAgent, stoppedWords } from "@/state/browserSignIn";
 import {
   type BrowserDriver,
   type BrowserTabState,
@@ -38,6 +43,11 @@ export type PageHands = {
   go: (tab: string, action: "back" | "forward" | "reload") => Promise<void>;
   script: (tab: string, op: Record<string, unknown>) => Promise<unknown>;
   capture: (tab: string) => Promise<ArrayBuffer>;
+  /** An agent begins acting in the tab, or stops: its hold of the page starts and ends with this. */
+  drive: (tab: string, on: boolean) => Promise<void>;
+  events: (tab: string, since: number, kinds: readonly string[]) => Promise<BrowserActivity>;
+  /** Whether the page is for the user alone; the Electron shell's. */
+  signInStop?: (tab: string) => Promise<SignInStop | null>;
 };
 
 const shell: PageHands = {
@@ -46,7 +56,59 @@ const shell: PageHands = {
   go: browserGo,
   script: browserAgent,
   capture: browserAgentCapture,
+  drive: browserAgentDrive,
+  events: browserAgentEvents,
+  signInStop: browserAgentSignInStop,
 };
+
+const holdChangeFailed = (error: unknown) => console.error("changing an agent's hold of a tab failed", error);
+
+/**
+ * The user took a tab over: the agent's hold of its page goes at once, so what they do is their own. Continue gives it
+ * back as it was, except that refs from before the user's turn are void.
+ */
+export function startHandingBack(): () => void {
+  return useAgentPause.subscribe(({ paused }, before) => {
+    for (const tab of Object.keys(paused)) {
+      if (!(tab in before.paused)) browserAgentDrive(tab, false).catch(holdChangeFailed);
+    }
+    for (const tab of Object.keys(before.paused)) {
+      if (!(tab in paused) && driverOf(tab)) browserAgentDrive(tab, true, true).catch(holdChangeFailed);
+    }
+  });
+}
+
+const PROFILE_CHANGED = "profile_changed: this tab's profile was deleted, so it moved to the user's default profile. Your refs are void and what it's signed in to may differ. Nothing was done: read it again before going on, and don't assume you are still the same user on the site.";
+
+/** The calls under way on a tab, cancelled when its profile goes. */
+const underWay = new Map<string, Set<(result: BrowserResult) => void>>();
+/** Tabs whose agent has yet to hear that the profile changed, which it hears once. */
+const moved = new Set<string>();
+
+/**
+ * A delete moves tab `tab` to another profile, about to close its page (section 4's onProfileChanged says so). Calls under way end now, the hold goes, and
+ * the agent's next call hears it once if none was under way to hear it: it mustn't carry on as someone else.
+ */
+export function profileChanged(tab: string): void {
+  if (!driverOf(tab)) return;
+  browserAgentDrive(tab, false).catch(() => {});
+  const calls = underWay.get(tab);
+  if (!calls?.size) {
+    moved.add(tab);
+    return;
+  }
+  for (const end of calls) end(failed(PROFILE_CHANGED));
+  calls.clear();
+}
+
+/** An in-flight call the user's take-over or DevTools overtook. */
+function pausedAnswer(answer: unknown, tab: string): BrowserResult | null {
+  if (typeof answer !== "object" || !answer || !("paused" in answer)) return null;
+  return answer.paused === "devtools" ? failed(PAUSED_DEVTOOLS) : { result: "paused", tab };
+}
+
+const PAUSED_DEVTOOLS = "Paused: DevTools open. The user has this tab; nothing was done. Calls on it answer devtools_open until they close DevTools and press Continue; `events` still works. Your refs on it are void then: read it again.";
+const DEVTOOLS_OPEN = "devtools_open: DevTools is open on this tab, so nothing was done, and it stays open. `events` still works. It goes on when the user closes DevTools and presses Continue.";
 
 /** How long a page load may take before the agent hears the page as it is then. */
 const LOAD_WAIT_MS = 20_000;
@@ -65,13 +127,22 @@ function messageOf(error: unknown): string {
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+const notCancelled = () => {};
+
 /** What `call` comes to on its tab. */
 export async function runCall(call: BrowserCall, hands: PageHands = shell): Promise<BrowserResult> {
   if (!useApp.getState().settings.browserEnabled) return failed("The built-in browser is off.");
+  const tab = "tab" in call.op ? call.op.tab : null;
+  if (tab !== null && moved.delete(tab)) return failed(PROFILE_CHANGED);
+  let end: (result: BrowserResult) => void = notCancelled;
+  const cancelled = new Promise<BrowserResult>((resolve) => { end = resolve; });
+  if (tab !== null) underWay.set(tab, (underWay.get(tab) ?? new Set()).add(end));
   try {
-    return await perform(call, hands);
+    return await Promise.race([perform(call, hands), cancelled]);
   } catch (error) {
     return failed(messageOf(error));
+  } finally {
+    if (tab !== null) underWay.get(tab)?.delete(end);
   }
 }
 
@@ -109,6 +180,10 @@ export function closeRequestTabs(conversationId: string, request: string): strin
     .filter((tab) => tab.id !== current.active && !isPaused(tab.id))
     .map((tab) => tab.id);
   for (const tab of gone) closeTab(conversationId, tab);
+  // Its agent is done: what stays open is the user's to use.
+  for (const tab of current.tabs) {
+    if (tab.kind === "browser" && tab.driver?.request === request && !gone.includes(tab.id)) shell.drive(tab.id, false).catch(() => {});
+  }
   return gone;
 }
 
@@ -130,7 +205,10 @@ async function perform(call: BrowserCall, hands: PageHands): Promise<BrowserResu
     const tab = there?.id ?? openAgentTab(conversationId, op.url, driver);
     if (!there || !useBrowsers.getState().pages[tab]) {
       await hands.open(tab, op.url, backgroundBounds());
+      await hands.drive(tab, true);
       await loaded(tab);
+    } else {
+      await hands.drive(tab, true);
     }
     return page(tab, hands);
   }
@@ -144,24 +222,30 @@ async function perform(call: BrowserCall, hands: PageHands): Promise<BrowserResu
   // Worked only with a driver, which the user's input in the tab pauses: one opened just to show
   // the user (open_in_app) is read until browser_open goes on in it.
   const users = !tab.driver;
-  if (users && op.op !== "read" && op.op !== "screenshot")
+  if (users && op.op !== "read" && op.op !== "screenshot" && op.op !== "events")
     return failed(isAgentTab(tab)
       ? `Tab ${tab.id} was opened for the user to see: you may read it. To work in it, browser_open its address; that goes on in this tab.`
       : `Tab ${tab.id} is the user's: you may read it, not click, type, navigate or close it. Open your own with browser_open.`);
+  if (devToolsOpen(tab.id) && op.op !== "events") return failed(DEVTOOLS_OPEN);
   // The user took it over: nothing is done until they press Continue.
-  if (!users && isPaused(tab.id)) return { result: "paused", tab: tab.id };
+  if (!users && !devToolsOpen(tab.id) && isPaused(tab.id)) return { result: "paused", tab: tab.id };
   // Its page goes with a restart: it loads again where it was. The user may take it over meanwhile.
   if (!useBrowsers.getState().pages[tab.id]) {
     await hands.open(tab.id, tab.url || "about:blank", backgroundBounds());
     await loaded(tab.id);
     if (!users && isPaused(tab.id)) return { result: "paused", tab: tab.id };
   }
-  const result = await act(tab.id, op, conversationId, hands);
+  if (!users && !devToolsOpen(tab.id)) await hands.drive(tab.id, true);
+  const result = await act(tab.id, op, conversationId, hands, call.label);
   return users && result.result === "page" ? { ...result, user: true } : result;
 }
 
-async function act(tab: string, op: Exclude<BrowserOp, { op: "open" | "show" }>, conversationId: string, hands: PageHands): Promise<BrowserResult> {
+async function act(tab: string, op: Exclude<BrowserOp, { op: "open" | "show" }>, conversationId: string, hands: PageHands, label: string): Promise<BrowserResult> {
   switch (op.op) {
+    case "events": {
+      const { lines, next, dropped } = await hands.events(tab, Number(op.since), op.kinds);
+      return { result: "events", tab, lines, next, dropped };
+    }
     case "navigate":
       starting(tab);
       await hands.load(tab, op.url);
@@ -178,11 +262,14 @@ async function act(tab: string, op: Exclude<BrowserOp, { op: "open" | "show" }>,
       const before = new Set(sessionTabs(conversationId).tabs.map((each) => each.id));
       const answer = await hands.script(tab, {
         kind: op.op,
+        label,
         target: op.target,
         ...(op.op === "type" ? { text: op.text, submit: op.submit } : {}),
         declared: op.guard.declared,
         approved: approvedHere(tab, op.guard),
       });
+      const overtaken = pausedAnswer(answer, tab);
+      if (overtaken) return overtaken;
       const asked = askOf(answer);
       if (asked) {
         const shown = useBrowsers.getState().pages[tab];
@@ -199,6 +286,17 @@ async function act(tab: string, op: Exclude<BrowserOp, { op: "open" | "show" }>,
       if (error) return failed(error);
       await settled(tab);
       return withPopups(await page(tab, hands), conversationId, tab, before);
+    }
+    case "eval": {
+      // Every run asks: a yes goes with one call, on the page it was given on, and is used here.
+      const shown = useBrowsers.getState().pages[tab];
+      if (approvedHere(tab, op.guard) === null || approvedHere(tab, op.guard) !== shown?.url) {
+        return { result: "needsApproval", tab, url: shown?.url ?? "", generation: shown?.generation ?? 0, sensitive: "script", what: "" };
+      }
+      const answer = await hands.script(tab, { kind: "eval", script: op.script });
+      const error = errorOf(answer);
+      if (error) return failed(error);
+      return { result: "evaluated", tab, url: urlOf(answer) ?? shown.url, text: String((answer as { text?: unknown }).text ?? "") };
     }
     case "screenshot": {
       const png = await hands.capture(tab);
@@ -230,7 +328,7 @@ function approvedHere(tab: string, guard: BrowserGuard): string | null {
   return guard.approved && guard.approved.generation === generation ? guard.approved.url : null;
 }
 
-const SENSITIVE: readonly BrowserSensitive[] = ["pay", "send", "signIn", "credentials", "card", "oneTimeCode"];
+const SENSITIVE: readonly BrowserSensitive[] = ["pay", "send", "signIn", "credentials", "card", "oneTimeCode", "script"];
 
 function askOf(answer: unknown): { sensitive: BrowserSensitive; what: string } | null {
   if (typeof answer !== "object" || !answer || !("ask" in answer)) return null;
@@ -275,7 +373,10 @@ async function settled(tab: string): Promise<void> {
 
 /** The tab's page, read for the agent. */
 async function page(tab: string, hands: PageHands): Promise<BrowserResult> {
+  const stopped = await stoppedAt(tab, hands);
+  if (stopped) return stopped;
   const answer = await hands.script(tab, { kind: "read", max: READ_MOST });
+  if (devToolsOpen(tab)) return failed(PAUSED_DEVTOOLS);
   const error = errorOf(answer);
   if (error) return failed(error);
   const read = answer as { url: string; title: string; text: string };
@@ -288,6 +389,31 @@ async function page(tab: string, hands: PageHands): Promise<BrowserResult> {
     text: read.text,
   };
   return { result: "page", tab, page: result, user: false };
+}
+
+/**
+ * What the agent hears on a page that stops it: the action it asked for is done, so this is its answer and not `paused`,
+ * which the daemon would run again after Continue. Its next call on the tab waits.
+ */
+async function stoppedAt(tab: string, hands: PageHands): Promise<BrowserResult | null> {
+  const owner = driverOf(tab);
+  if (!owner) return null;
+  let stop = askedOf(tab);
+  if (!stop && !isPaused(tab)) {
+    const found = (await hands.signInStop?.(tab)) ?? null;
+    if (!found) signInCleared(tab);
+    else if (stopAgent(tab, found)) stop = found;
+  }
+  if (!stop) return null;
+  const shown = useBrowsers.getState().pages[tab];
+  const read: BrowserPageRead = {
+    url: shown?.url ?? "",
+    title: shown?.title ?? "",
+    generation: shown?.generation ?? 0,
+    loading: shown?.loading ?? false,
+    text: stoppedWords(stop, tab).agent,
+  };
+  return { result: "page", tab, page: read, user: false };
 }
 
 /** `bytes` as base64. */

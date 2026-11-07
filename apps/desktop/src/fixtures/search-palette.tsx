@@ -6,7 +6,7 @@
  * app's shared parts and writes their looks to #palette-look. Without either, the palette stays
  * open on the first session, for screenshots.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

@@ -4,7 +4,7 @@
  * and then the plain one. A session lists its checkout's files; a new chat and a new session
  * open the `@` menu too. What it saw goes as JSON into `<pre id="composer-menus-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

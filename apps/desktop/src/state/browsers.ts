@@ -1,11 +1,13 @@
 import { create } from "zustand";
 import { stepZoom } from "@/app/conversation/browserKeys";
 
-import { browserClose, browserNavigate, browserOpen, browserPermission, browserZoom, revealPath } from "@/ipc/client";
+import { browserClose, browserNavigate, browserOpen, browserPermission, browserPermissionSettings, browserZoom, revealPath } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
+import { listen } from "@/ipc/native";
 import { pageUsed } from "@/state/agentPause";
 import { closeFind, findState, forgetFind } from "@/state/browserFind";
-import { closeTabAnywhere, openPopupTab, sessionTabs } from "@/state/sessionTabs";
+import { shareTabProfile } from "@/state/browserProfilePlaces";
+import { closeTabAnywhere, openPopupTab, sessionTabs, sessionWith } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -22,15 +24,23 @@ export type BrowserPage = {
   favicon?: string | null;
   /** The last navigation or download the tab refused, offered to the system browser. */
   blocked: string | null;
+  /** The page asked for a passkey, which this build can't use (macOS, electron/guestPasskey.ts). */
+  passkeyRefused?: boolean;
+  /** What the page's history allows, once the shell has said (the Electron build does). */
+  canGoBack?: boolean;
+  canGoForward?: boolean;
   /** The page zoom (1 is 100%) the shell last said; it stays from page to page in the tab. */
   zoom?: number;
   /** The page's question for the camera or microphone, waiting for an answer (macOS). */
   asking?: BrowserAsking | null;
+  /** What the system refused or has off, after the person allowed it here. */
+  osRefused?: { origin: string; refused: OsRefused[] } | null;
   /** Counts the tab's page loads: an agent's refs and the user's yes hold within one. */
   generation?: number;
 };
 
-export type BrowserAsking = { request: number; origin: string; camera: boolean; microphone: boolean };
+export type BrowserAsking = { request: number; origin: string; camera: boolean; microphone: boolean; location?: boolean };
+export type OsRefused = "camera" | "microphone" | "location";
 
 /** How the tab answers a page's question: see `browserPermission`. */
 export type PermissionAnswer = Parameters<typeof browserPermission>[1];
@@ -78,6 +88,10 @@ export async function openPage(
   agent = false,
 ): Promise<void> {
   const page = useBrowsers.getState().pages[id];
+  // A tab with a title and no page has shown this before: a restart brought it back, which is no new visit. Read
+  // here, since the new page's empty title is about to reach the tab.
+  const session = sessionWith(id);
+  const restored = !page && Boolean(session) && sessionTabs(session as string).tabs.some((tab) => tab.id === id && tab.kind === "browser" && Boolean(tab.title));
   useBrowsers.setState(({ pages }) => ({
     pages: {
       ...pages,
@@ -87,6 +101,8 @@ export async function openPage(
         loading: true,
         blocked: null,
         ready: made.has(id),
+        ...(page?.canGoBack === undefined ? {} : { canGoBack: page.canGoBack }),
+        ...(page?.canGoForward === undefined ? {} : { canGoForward: page.canGoForward }),
         ...(page?.zoom === undefined ? {} : { zoom: page.zoom }),
         ...(page?.generation === undefined ? {} : { generation: page.generation }),
       },
@@ -100,12 +116,17 @@ export async function openPage(
     await browserOpen(id, url, bounds, agent, (event) => {
       if (event.type === "load") {
         const shown = useBrowsers.getState().pages[id];
+        if (!event.loading) syncZoom(id);
         update(id, { url: event.url, loading: event.loading,
-          ...(event.url !== shown?.url ? { favicon: null } : {}),
+          // Another site's. A pushState looks like any other load here and nothing sends its icon again;
+          // a new page of this site keeps the old icon until its own arrives, as in a browser.
+          ...(originOf(event.url) !== originOf(shown?.url ?? "") ? { favicon: null } : {}),
+          ...(shown?.passkeyRefused && originOf(event.url) !== originOf(shown.url) ? { passkeyRefused: false } : {}),
           ...(event.loading ? { generation: (shown?.generation ?? 0) + 1 } : {}),
           // The shell drops a question from a site the page left.
           ...(shown?.asking && originOf(event.url) !== shown.asking.origin ? { asking: null } : {}) });
       }
+      else if (event.type === "history") update(id, { canGoBack: event.canGoBack, canGoForward: event.canGoForward });
       else if (event.type === "title") update(id, { title: event.title });
       else if (event.type === "favicon") {
         if (faviconFits(useBrowsers.getState().pages[id], event.url)) update(id, { favicon: event.dataUrl });
@@ -120,16 +141,20 @@ export async function openPage(
         zoomPage(id, stepZoom(zoom, 1)).catch(() => {});
       }
       else if (event.type === "popup") {
+        // A popup is signed in as its opener: it opens on the opener's profile, whatever its session is on now.
+        shareTabProfile(id, event.id);
         // Its page waits for a tab; with the opener's tab gone it has none.
         if (!openPopupTab(id, event.id, event.url)) browserClose(event.id).catch(() => {});
       }
       else if (event.type === "closed") closeTabAnywhere(id);
       else if (event.type === "permission") {
-        const { request, origin, camera, microphone } = event;
-        update(id, { asking: { request, origin, camera, microphone } });
+        const { request, origin, camera, microphone, location } = event;
+        update(id, { asking: { request, origin, camera, microphone, ...(location ? { location } : {}) } });
       }
+      else if (event.type === "permissionRefused") update(id, { osRefused: { origin: event.origin, refused: event.refused as OsRefused[] } });
       else if (event.type === "blocked") update(id, { blocked: event.url, loading: false });
-    });
+      else if (event.type === "passkeyRefused") update(id, { passkeyRefused: true });
+    }, restored);
     if (!useBrowsers.getState().pages[id]) { await browserClose(id); return; }
     made.add(id);
     update(id, { ready: true });
@@ -159,6 +184,22 @@ export function answerPermission(id: string, answer: PermissionAnswer): void {
   );
 }
 
+/** The shell's word on a download: the lists read again, and a finished or failed one gets its toast. */
+export function listenForDownloads(): void {
+  void listen<{ finished: { path: string; ok: boolean } | null }>("browser-download", ({ payload }) => {
+    if (payload.finished) downloaded(payload.finished.path, payload.finished.ok);
+    else useBrowsers.setState(({ downloads }) => ({ downloads: downloads + 1 }));
+  });
+}
+
+export function closeOsRefused(id: string): void {
+  update(id, { osRefused: null });
+}
+
+export function openOsPermissionSettings(device: OsRefused): Promise<void> {
+  return browserPermissionSettings(device);
+}
+
 /** A download finished or failed: a toast says so, and finds the file. */
 function downloaded(path: string, ok: boolean): void {
   useBrowsers.setState(({ downloads }) => ({ downloads: downloads + 1 }));
@@ -178,8 +219,17 @@ export async function zoomPage(id: string, zoom: number): Promise<void> {
   update(id, { zoom: await browserZoom(id, zoom) });
 }
 
+/** Reads the zoom the page is at: on Electron it belongs to the site, so a load or another tab can change it. */
+export function syncZoom(id: string): void {
+  browserZoom(id, null).then((zoom) => update(id, { zoom }), () => {});
+}
+
 export function dismissBlocked(id: string): void {
   update(id, { blocked: null });
+}
+
+export function dismissPasskeyRefused(id: string): void {
+  update(id, { passkeyRefused: false });
 }
 
 /** The tab closed, or its conversation did: the page and all it stored go. */

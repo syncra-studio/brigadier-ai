@@ -1,3 +1,4 @@
+import { BrowserScript } from "@/app/conversation/cards/BrowserScript";
 import {
   type ReactNode,
   useEffect,
@@ -305,7 +306,7 @@ function describe(
         icon: <Globe />,
         kind: "Browser",
         title: subject.question,
-        body: <ToolBox prose className="mx-3"><CodeSpans text={subject.details} /></ToolBox>,
+        body: subject.sensitive === "script" ? <BrowserScript details={subject.details} /> : <ToolBox prose className="mx-3"><CodeSpans text={subject.details} /></ToolBox>,
         allow: "Go ahead",
         deny: "Don't",
       };

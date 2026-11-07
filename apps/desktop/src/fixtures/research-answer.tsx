@@ -16,7 +16,7 @@
  * page holds the answer still, for a screenshot.
  */
 import "@/fixtures/cliView";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

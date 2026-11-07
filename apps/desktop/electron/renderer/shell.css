@@ -1,0 +1,16 @@
+/* Tauri starts a window drag only on the element that carries data-tauri-drag-region. Chromium's regions
+   cover descendants and whatever is painted above them, so both are carved back out. */
+html[data-shell="electron"] [data-tauri-drag-region] {
+  app-region: drag;
+}
+html[data-shell="electron"] [data-tauri-drag-region] * {
+  app-region: no-drag;
+}
+html[data-shell="electron"] [data-tauri-drag-region] [data-tauri-drag-region] {
+  app-region: drag;
+}
+html[data-shell="electron"] [data-radix-popper-content-wrapper],
+html[data-shell="electron"] [role="dialog"],
+html[data-shell="electron"] [role="alertdialog"] {
+  app-region: no-drag;
+}

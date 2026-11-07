@@ -18,7 +18,7 @@
  * nothing held: no join, the block open only through the hand-off's own turns. `?seam=moved`: the
  * same, the hand-off going to another CLI. `&stop=<step>` leaves the page at that step.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

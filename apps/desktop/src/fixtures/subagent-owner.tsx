@@ -3,7 +3,7 @@
  * isn't drawn): the subagent is found in that worker's thread, so the thread stays through a
  * resync, and one not held when the panel opens is read (#760).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

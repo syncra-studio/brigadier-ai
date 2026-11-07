@@ -4,7 +4,7 @@
  * sides; and the merge editor, whose picks make the result and whose Complete Merge asks first
  * while conflicts are left, then writes the result and stages it.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

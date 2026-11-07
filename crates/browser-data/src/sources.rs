@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{Family, Profile, app_dirs, discover_in};
+use crate::{Family, Layout, Profile, discover_layout};
 
 /// The browsers listed first, by key, in this order; every other browser follows by name, and
 /// the stores found only by their shape ("‹App› (Chromium)") come last.
@@ -20,7 +20,7 @@ pub struct Source {
     /// Its display name, e.g. "Google Chrome" or "Comet (Chromium)".
     pub name: String,
     pub family: Family,
-    /// Its app bundle, which exists.
+    /// Its app (a bundle on macOS, an executable or launcher elsewhere), which exists.
     pub app_path: PathBuf,
     /// Its profiles, the browser's default one first.
     pub profiles: Vec<Profile>,
@@ -29,7 +29,12 @@ pub struct Source {
 /// Where a browser sorts: its place in the fixed order, then other known browsers, then the
 /// ones found by shape.
 pub fn browser_rank(key: &str, name: &str) -> (usize, String) {
-    let rank = match ORDER.iter().position(|known| *known == key) {
+    // A Linux browser's Snap and Flatpak installs sort with the browser.
+    let base = key
+        .strip_suffix("-snap")
+        .or_else(|| key.strip_suffix("-flatpak"))
+        .unwrap_or(key);
+    let rank = match ORDER.iter().position(|known| *known == base) {
         Some(at) => at,
         None if name.ends_with(" (Chromium)") || name.ends_with(" (Firefox)") => ORDER.len() + 1,
         None => ORDER.len(),
@@ -37,18 +42,26 @@ pub fn browser_rank(key: &str, name: &str) -> (usize, String) {
     (rank, name.to_lowercase())
 }
 
-/// The installed browsers with profiles under `home`, in Settings' order. A browser whose app
-/// isn't installed is left out even when its folders remain.
+/// The installed browsers with profiles for the user whose home is `home`, on this OS, in
+/// Settings' order. A browser whose app isn't installed is left out even when its folders remain.
 pub fn sources(home: &Path) -> Vec<Source> {
-    let dirs = app_dirs(home);
-    sources_in(home, &dirs.iter().map(PathBuf::as_path).collect::<Vec<_>>())
+    sources_layout(&Layout::current(home))
 }
 
-/// [`sources`] with explicit folders to look for app bundles in.
+/// [`sources`] over macOS's folders, whichever OS this runs on, with explicit folders to look for
+/// app bundles in.
 pub fn sources_in(home: &Path, app_dirs: &[&Path]) -> Vec<Source> {
+    sources_layout(&Layout::Macos {
+        home: home.to_owned(),
+        app_dirs: app_dirs.iter().map(|dir| dir.to_path_buf()).collect(),
+    })
+}
+
+/// [`sources`] over the folders of `layout`, whichever OS this runs on.
+pub fn sources_layout(layout: &Layout) -> Vec<Source> {
     let mut sources: Vec<Source> = Vec::new();
-    for profile in discover_in(home, app_dirs) {
-        let Some(app) = profile.app_path.clone().filter(|app| app.is_dir()) else {
+    for profile in discover_layout(layout) {
+        let Some(app) = profile.app_path.clone().filter(|app| app.exists()) else {
             continue;
         };
         let key = profile.id.split('/').next().unwrap_or_default().to_owned();
@@ -86,12 +99,14 @@ mod tests {
             ("librewolf", "LibreWolf"),
             ("mercury", "Mercury (Firefox)"),
             ("helium", "Helium"),
+            ("chrome-flatpak", "Google Chrome (Flatpak)"),
         ];
         names.sort_by_cached_key(|(key, name)| browser_rank(key, name));
         assert_eq!(
             names.iter().map(|(_, name)| *name).collect::<Vec<_>>(),
             [
                 "Google Chrome",
+                "Google Chrome (Flatpak)",
                 "Helium",
                 "Dia",
                 "Safari",

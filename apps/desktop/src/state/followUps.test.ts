@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { clearMocks, mockIPC } from "@/ipc/nativeMocks";
 
 import { threadActions } from "@/components/conversation/thread-scroll";
 import type { EventEnvelope, Message, Mention, QueuedMessage, SendOutcome } from "@/ipc/generated";

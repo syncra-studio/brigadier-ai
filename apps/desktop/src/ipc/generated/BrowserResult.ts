@@ -13,4 +13,4 @@ generation: number, sensitive: BrowserSensitive,
 /**
  * The control, as the page names it.
  */
-what: string, } | { "result": "failed", message: string, };
+what: string, } | { "result": "evaluated", tab: string, url: string, text: string, } | { "result": "events", tab: string, lines: Array<string>, next: number, dropped: number, } | { "result": "failed", message: string, };

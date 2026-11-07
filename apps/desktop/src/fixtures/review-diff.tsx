@@ -13,7 +13,7 @@
  *   once, never as plain lines first.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useAui, useExternalStoreRuntime } from "@/components/conversation";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 

@@ -1,5 +1,5 @@
 /** Tests lifecycle rows with no commands, internal ids or diff totals, and the Workers strip. */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { TeamSentence } from "@/app/conversation/activity/TeamSentence";

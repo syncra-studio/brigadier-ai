@@ -9,7 +9,7 @@
  * column, a chip's icon stays on its name's line. Driven with real clicks; IPC is mocked, no
  * daemon. `?stop=reader` holds the page with the reader open on rounding.md, for a screenshot.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

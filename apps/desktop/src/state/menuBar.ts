@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/ipc/native";
 
 import { setRunningChats } from "@/ipc/client";
 import type { Conversation, RunningChat } from "@/ipc/generated";

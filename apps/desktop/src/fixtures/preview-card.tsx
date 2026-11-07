@@ -37,7 +37,7 @@
  * then clicks through it, to `<pre id="preview-card-result">` (PreviewCardRender.test.ts).
  */
 import "@/fixtures/cliView";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 import type { ReactNode } from "react";
 

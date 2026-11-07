@@ -4,7 +4,7 @@
  * #pr-card-result: its words, its state word and tone, and any buttons it has (none, S14). With
  * `?push=1` its thread then finishes a `git push`, and the result counts the row's reads of `gh`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";

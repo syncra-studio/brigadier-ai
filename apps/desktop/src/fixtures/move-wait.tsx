@@ -5,7 +5,7 @@
  * `?stop=row` or `?stop=dialog` it stays there, to be looked at. What it saw goes as JSON into
  * `<pre id="move-wait-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

@@ -276,6 +276,9 @@ Patches applied, in order:
 - `patches/0259-windows-unanswered-launch-refusal-says-why-and-what-clears-it.diff`: After a Notepad or Settings launch did not answer within 15 s, the refusal of a later launch that finds a window of that app says why it stays and what ends it: Windows may have opened that window for the earlier launch afterwards, nothing ties it to that launch (one process of the app serves the user and the helper alike), so the helper never treats it as its own, and every launch of that app is refused until no window of it is open.
 - `patches/0260-linux-gtk-frame-at-the-corner-under-mutter.diff`: A GTK3 window at the corner of the screen under mutter has a frame near (0,0) that differs from mutter's frame window by its invisible borders, so it was taken for Chromium's renderer-local frame and its elements came out one title bar too low; a frame that holds the client window where it really is stays a screen rectangle.
 - `patches/0261-linux-gtk-frame-patch-formatted.diff`: Format the Linux window size code from 0260 so cargo fmt --check passes.
+- `patches/0262-macos-no-rego-or-script-engines.diff`: The macOS backend asks for cua-driver-core without its Rego and QuickJS engines, keeping YAML policies, so an embedding app that never uses them can leave them out of its binary; Cargo unifies features, so one crate asking for the defaults would bring them back.
+- `patches/0263-windows-no-rego-or-script-engines.diff`: The windows backend asks for cua-driver-core without its Rego and QuickJS engines, keeping YAML policies, as patch 0262 does for macOS, so an embedding app that never uses them can leave them out of its binary.
+- `patches/0264-linux-no-rego-or-script-engines.diff`: The linux backend asks for cua-driver-core without its Rego and QuickJS engines, keeping YAML policies, as patch 0262 does for macOS, so an embedding app that never uses them can leave them out of its binary.
 
 <!-- sync:end -->
 

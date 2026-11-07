@@ -6,7 +6,7 @@
  * nothing of the kind. Then the picker's
  * keys: arrows between its columns, typing to search, Escape. What it saw goes as JSON into `<pre id="composer-continue-on-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

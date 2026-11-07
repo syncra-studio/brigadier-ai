@@ -8,7 +8,7 @@
  *   opening and closing over 300ms.
  * - A streaming reply: a list item, a rule and an image that arrive fade in over 150ms like words.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

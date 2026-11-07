@@ -38,6 +38,11 @@ forkedFrom: ForkOrigin | null,
  */
 sideOf: ConversationId | null, 
 /**
+ * Set for a session started from another one: its parent, whose browser profile it opens
+ * on until it has its own.
+ */
+startedFrom?: ConversationId, 
+/**
  * Set for a tab's own chat (with `side_of`, its session): the tab it belongs to.
  */
 tabChat?: TabChat, 

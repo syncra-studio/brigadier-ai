@@ -8,7 +8,7 @@ export type BrowserSite = {
 /**
  * `scheme://host[:port]`.
  */
-origin: string, camera: SitePermission, microphone: SitePermission, 
+origin: string, camera: SitePermission, microphone: SitePermission, location: SitePermission, 
 /**
  * When it last asked, in ms since the Unix epoch.
  */

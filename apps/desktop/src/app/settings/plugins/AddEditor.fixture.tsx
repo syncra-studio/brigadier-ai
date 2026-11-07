@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { TooltipProvider } from "@/components/overlays";
 import type { CatalogRow, ProjectPrefs, Request } from "@/ipc/generated";
 import { useApp } from "@/state/store";

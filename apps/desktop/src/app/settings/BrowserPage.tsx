@@ -1,13 +1,17 @@
 import { useState } from "react";
 
+import { BrowserBookmarks } from "@/app/settings/BrowserBookmarks";
 import { BrowserDownloads } from "@/app/settings/BrowserDownloads";
 import { BrowserHistory } from "@/app/settings/BrowserHistory";
+import { BrowserPasswords } from "@/app/settings/BrowserPasswords";
 import { BrowserOffNote } from "@/app/settings/BrowserOffNote";
 import { BrowserSiteSettings } from "@/app/settings/BrowserSiteSettings";
 import { BrowserSwitch } from "@/app/settings/BrowserSwitch";
 import { ClearBrowsingDataDialog } from "@/app/settings/ClearBrowsingDataDialog";
 import { LinkRow } from "@/app/settings/LinkRow";
 import { LocationRow } from "@/app/settings/LocationRow";
+import { ProfileDetailPage } from "@/app/settings/ProfileDetailPage";
+import { openProfileDetail, ProfilesSection } from "@/app/settings/ProfilesSection";
 import { SettingsPage, SettingsSection, SwitchSetting } from "@/app/settings/parts";
 import { Button } from "@/components/controls";
 import { SettingsCard, SettingsRow } from "@/components/shared";
@@ -44,6 +48,14 @@ export const BROWSER_ROWS = {
     label: "Browsing history",
     description: "View and remove pages you visited in the built-in browser",
   },
+  passwords: {
+    label: "Saved passwords",
+    description: "View, add and remove the passwords the built-in browser fills",
+  },
+  bookmarks: {
+    label: "Bookmarks",
+    description: "View, add and remove the built-in browser's bookmarks",
+  },
   location: {
     label: "Location",
     description: "Where files you download in the built-in browser are saved",
@@ -56,9 +68,13 @@ export const BROWSER_ROWS = {
     label: "Download history",
     description: "View the files you downloaded in the built-in browser",
   },
+  profiles: {
+    label: "Profiles",
+    description: "Separate sign-ins, history, bookmarks and passwords for each part of your life, and which profile new sessions start on",
+  },
   sites: {
     label: "Site settings",
-    description: "Which sites may use your camera and microphone in the built-in browser",
+    description: "Which sites may use your camera, microphone and location, for each profile",
   },
 } as const;
 
@@ -73,22 +89,40 @@ export function BrowserPage() {
   const shown = useApp((s) => s.selection);
   const clearingUnder = useBrowserSettingsView((s) => s.clearing);
   const view = shown.type === "settings" && shown.page === "browser" ? shown.detail?.view ?? "page" : "page";
+  const profileId = shown.type === "settings" && shown.page === "browser" ? shown.detail?.profile : undefined;
   const clearing = clearingUnder !== null && clearingUnder === shown;
   const [cleared, setCleared] = useState(0);
+  const [clearOn, setClearOn] = useState<string | undefined>(undefined);
   const clearDialog = (
     <ClearBrowsingDataDialog
+      profile={clearOn ?? profileId}
       open={clearing}
       onOpenChange={setClearing}
       siteData={mac}
       onCleared={() => setCleared((count) => count + 1)}
     />
   );
-  if (on && mac && view === "sites") return <BrowserSiteSettings onBack={() => setView("page")} />;
-  if (on && embedded && view === "downloads") return <BrowserDownloads onBack={() => setView("page")} />;
+  if (on && embedded && view === "profile" && profileId) return <ProfileDetailPage id={profileId} onBack={() => setView("page")} />;
+  if (on && embedded && view === "passwords") return <BrowserPasswords profile={profileId} onBack={() => setView("page")} />;
+  if (on && embedded && view === "bookmarks") return <BrowserBookmarks profile={profileId} onBack={() => setView("page")} />;
+  if (on && embedded && view === "sites") {
+    return <BrowserSiteSettings profile={profileId} onBack={() => (profileId ? void openProfileDetail(profileId) : setView("page"))} />;
+  }
+  const backFromData = () => (profileId ? void openProfileDetail(profileId) : setView("page"));
+  if (on && embedded && view === "downloads") return <BrowserDownloads key={profileId ?? ""} profile={profileId} onBack={backFromData} />;
   if (on && embedded && view === "history") {
     return (
       <>
-        <BrowserHistory onBack={() => setView("page")} onClear={() => setClearing(true)} cleared={cleared} />
+        <BrowserHistory
+          key={profileId ?? ""}
+          profile={profileId}
+          onBack={backFromData}
+          onClear={(profile) => {
+            setClearOn(profile);
+            setClearing(true);
+          }}
+          cleared={cleared}
+        />
         {clearDialog}
       </>
     );
@@ -101,6 +135,7 @@ export function BrowserPage() {
         </SettingsCard>
         {!on && <BrowserOffNote>{OFF_NOTE}</BrowserOffNote>}
       </SettingsSection>
+      {on && embedded && <ProfilesSection />}
       {on && embedded && (
         <SettingsSection title="General">
           <SettingsCard>
@@ -108,10 +143,31 @@ export function BrowserPage() {
             <LinkRow setting="localLinksIn" row={BROWSER_ROWS.localLinks} />
             <SwitchSetting setting="browserFullUrl" row={BROWSER_ROWS.fullUrl} />
             <SettingsRow label={BROWSER_ROWS.data.label} description={BROWSER_ROWS.data.description}>
-              <Button variant="soft" size="sm" onClick={() => setClearing(true)}>Clear browsing data</Button>
+              <Button
+                variant="soft"
+                size="sm"
+                onClick={() => {
+                  setClearOn(undefined);
+                  setClearing(true);
+                }}
+              >
+                Clear browsing data
+              </Button>
             </SettingsRow>
             <SettingsRow label={BROWSER_ROWS.history.label} description={BROWSER_ROWS.history.description}>
               <Button variant="soft" size="sm" onClick={() => setView("history")}>Manage</Button>
+            </SettingsRow>
+          </SettingsCard>
+        </SettingsSection>
+      )}
+      {on && embedded && (
+        <SettingsSection title="Passwords and bookmarks">
+          <SettingsCard>
+            <SettingsRow label={BROWSER_ROWS.passwords.label} description={BROWSER_ROWS.passwords.description}>
+              <Button variant="soft" size="sm" onClick={() => setView("passwords")}>Manage</Button>
+            </SettingsRow>
+            <SettingsRow label={BROWSER_ROWS.bookmarks.label} description={BROWSER_ROWS.bookmarks.description}>
+              <Button variant="soft" size="sm" onClick={() => setView("bookmarks")}>Manage</Button>
             </SettingsRow>
           </SettingsCard>
         </SettingsSection>
@@ -127,7 +183,7 @@ export function BrowserPage() {
           </SettingsCard>
         </SettingsSection>
       )}
-      {on && mac && (
+      {on && embedded && (
         <SettingsSection title="Browser permissions">
           <SettingsCard>
             <SettingsRow label={BROWSER_ROWS.sites.label} description={BROWSER_ROWS.sites.description}>

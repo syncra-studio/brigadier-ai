@@ -5,7 +5,7 @@
  * session, and `/` › Start as a new session sets a New session chip for the next send. What it
  * saw goes as JSON into `<pre id="composer-background-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

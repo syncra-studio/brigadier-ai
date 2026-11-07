@@ -13,7 +13,7 @@
  * - `shown`: visible, frames frozen, the control: each opens with its animation, at its first
  *   frame here, as the covered window showed it.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

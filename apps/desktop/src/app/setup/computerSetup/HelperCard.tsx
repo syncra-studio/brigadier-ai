@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/ipc/native";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/components/controls";

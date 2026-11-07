@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef, type MouseEvent as ReactMouseEven
 
 import { MockupTabStatus } from "@/app/conversation/MockupTab";
 import { BrowserTabIcon } from "@/app/conversation/BrowserTabIcon";
+import { TabProfileDot } from "@/app/settings/ProfileMark";
 import { TabMenu } from "@/app/shell/TabMenu";
 import { FileTypeIcon, MockupTabIcon } from "@/components/conversation";
 import { ChatCompose, Clock, DiffGlyph, Dock, Document, FileDocument, Globe, Terminal, X } from "@/components/icons";
@@ -90,7 +91,7 @@ export function SessionTab({
           {tab.kind === "file" || tab.kind === "conflict" ? (
             <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
           ) : tab.kind === "newTab" ? <Globe className="size-icon-sm shrink-0" />
-            : tab.kind === "browser" ? <BrowserTabIcon tabId={tab.id} />
+            : tab.kind === "browser" ? <span className="relative flex shrink-0"><BrowserTabIcon tabId={tab.id} saved={tab.favicon} /><TabProfileDot conversationId={conversationId} tabId={tab.id} /></span>
             : tab.kind === "terminal" ? <Dock className="size-icon-sm shrink-0" />
             : tab.kind === "sideChat" ? <ChatCompose className="size-icon-sm shrink-0" />
             : tab.kind === "page" ? <Document className="size-icon-sm shrink-0" />

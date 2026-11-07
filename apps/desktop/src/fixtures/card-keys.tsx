@@ -5,7 +5,7 @@
  * browser's real keys and clicks (`fixtureInput`) so focus decides where a key lands. IPC is
  * mocked and records every answer; no daemon or credentials.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { type PendingAction, PendingActionCard } from "@/app/conversation/ActionCards";

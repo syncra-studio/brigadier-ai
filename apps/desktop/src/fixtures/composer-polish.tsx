@@ -5,8 +5,8 @@
  * real keys (`fixtureInput`) and writes what it saw as JSON into `<pre id="composer-polish-result">`.
  */
 import { followBoardRun } from "@/fixtures/cliView";
-import { emit } from "@tauri-apps/api/event";
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { emit } from "@/ipc/nativeMocks";
+import { mockIPC, mockWindows } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

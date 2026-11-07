@@ -10,7 +10,7 @@
  * ?state=empty|filled|signin|signin-waiting|signin-nogh|working|done|failed shows the design's
  * state, for screenshots.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

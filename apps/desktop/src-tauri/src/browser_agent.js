@@ -6,10 +6,18 @@
 // Ops: { kind: "read", max } -> { url, title, text }
 //      { kind: "click", target, declared, approved } -> { done } | { ask, url } | { error }
 //      { kind: "type", target, text, submit, declared, approved } -> the same
-// An action that pays, sends or signs in (declared by the agent), or that enters or submits a
-// password, a card or a one-time code (seen here), returns `ask` and does nothing unless the
-// user said yes to it on this page (`approved`: the address the yes was given at, which the app
+// A password field, seen by its type, its autocomplete, its computed text security or its names, shows only as a line
+// with no ref and nothing goes into it, yes or no: only the user fills those in. An action that pays, sends or signs in
+// (declared by the agent), or that enters or submits a card or a one-time code or submits a password (seen here),
+// returns `ask` and does nothing unless the user said yes to it on this page (`approved`: the address the yes was given at, which the app
 // passes only while the tab is still on the page it was given on).
+//
+// With `trusted: true` (the Electron shell, in an isolated world) a click or typing isn't done here:
+// it answers { point: { x, y } } for the shell to do with real input, or an error if something covers
+// the control. { kind: "place", target, typing } answers where the control is now, without scrolling, and for typing
+// refuses a field that lost the focus. With `isolated: true` it runs in a world of its own: refs are kept there, not
+// in the page's DOM, where the page could see or forge them. { kind: "void" } forgets them.
+// { kind: "sweep" } answers every password field's place and value, for the shell's own use: it never reaches an agent.
 (op) => {
   const REF = "data-brigadier-ref";
   const NEXT = "data-brigadier-next-ref";
@@ -80,19 +88,37 @@
     return "";
   };
 
+  /** Fields that were password fields once, in this world: a "show password" toggle changes nothing. */
+  const wasPassword = () => (window.__brigadierPasswordFields ??= new WeakSet());
+
   /** What kind of private thing a field takes: a password, a card or a one-time code. */
   const fieldKind = (element) => {
-    if (!element || !["input", "textarea"].includes(element.localName)) return null;
+    if (!element?.getAttribute) return null;
+    const editable = element.isContentEditable;
+    const field = ["input", "textarea"].includes(element.localName);
+    if (!field && !editable) return null;
+    if (op.isolated && wasPassword().has(element)) return "credentials";
     const auto = (element.getAttribute("autocomplete") || "").toLowerCase();
     const hint = [element.name, element.id, element.getAttribute("aria-label"), element.placeholder, element.labels?.[0]?.innerText]
       .join(" ").toLowerCase();
-    if (element.type === "password" || /\b(current|new)-password\b/.test(auto)) return "credentials";
+    const password = () => {
+      if (op.isolated) wasPassword().add(element);
+      return "credentials";
+    };
+    if (element.type === "password" || /\b(current|new)-password\b/.test(auto)) return password();
+    // A text field disguised as a password field.
+    if ((getComputedStyle(element).webkitTextSecurity || "none") !== "none") return password();
+    if (!field) return null;
     if (/\bcc-(number|csc|exp|exp-month|exp-year)\b/.test(auto) ||
         /card.?number|\bcc.?num|\bcvc\b|\bcvv\b|\bcsc\b|security code|expiry|expiration/.test(hint)) return "card";
     if (/\bone-time-code\b/.test(auto) ||
         /\botp\b|one.?time|verification code|2fa|two.?factor|auth(entication)? code/.test(hint)) return "oneTimeCode";
+    if (["", "text", "search"].includes(element.getAttribute("type") ?? "") && /pass(word|wd|phrase|code)|pwd/.test(hint)) return password();
     return null;
   };
+
+  const isPassword = (element) => fieldKind(element) === "credentials";
+  const HANDS_OFF = "That is a password field, and only the user fills those in, so nothing was done. Ask them to sign in in this tab, and go on when they say so.";
 
   /** The private kind a filled field of `scope` holds (`also` counts as filled), if any. */
   const filledKind = (scope, also) => {
@@ -123,12 +149,25 @@
     }
   };
 
+  const refs = () => (window.__brigadierRefs ??= { next: 1, byRef: new Map(), of: new WeakMap() });
+
   const find = (ref) => {
+    if (op.isolated) return refs().byRef.get(ref)?.deref() ?? null;
     for (const element of each(document)) if (element.getAttribute(REF) === ref) return element;
     return null;
   };
 
   const refOf = (element) => {
+    if (op.isolated) {
+      const store = refs();
+      let own = store.of.get(element);
+      if (!own) {
+        own = `e${store.next++}`;
+        store.of.set(element, own);
+        store.byRef.set(own, new WeakRef(element));
+      }
+      return own;
+    }
     let ref = element.getAttribute(REF);
     if (ref) return ref;
     const root = document.documentElement;
@@ -155,7 +194,7 @@
       if (role === "textbox" || role === "searchbox" || role === "combobox" || role === "slider" || role === "spinbutton") {
         const value = element.isContentEditable ? element.innerText
           : element.localName === "select" ? element.selectedOptions?.[0]?.text : element.value;
-        // A password, card number or code is never read out, only whether it is filled.
+        // A card number or code is never read out, only whether it is filled.
         if (fieldKind(element)) text += value ? " (filled)" : "";
         else if (value) text += ` value=${quoted(value)}`;
         if (element.localName === "select") {
@@ -173,7 +212,7 @@
       }
       if (element.disabled || element.getAttribute("aria-disabled") === "true") text += " (disabled)";
       const kind = fieldKind(element);
-      if (kind) text += ` (${kind === "credentials" ? "password" : kind === "card" ? "card" : "one-time code"} field)`;
+      if (kind) text += ` (${kind === "card" ? "card" : "one-time code"} field)`;
       return text;
     };
     // A label's own text is its control's name, read with the control.
@@ -193,7 +232,8 @@
         const role = roleOf(child);
         if (role) {
           flush();
-          lines.push(describe(child, role));
+          // Nothing of a password field but that it is there: no ref to use, no name or value.
+          lines.push(isPassword(child) ? "(A password field, hidden: only the user fills it in.)" : describe(child, role));
           continue;
         }
         const block = BLOCK.test(tag);
@@ -217,6 +257,13 @@
       text = `${text.slice(0, most)}\n(The page goes on: ${rest} more characters not shown.)`;
     }
     return { url: location.href, title: document.title, text };
+  };
+
+  /** What has the focus, through open shadow roots. */
+  const deepFocused = () => {
+    let focused = document.activeElement;
+    while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+    return focused;
   };
 
   const target = () => {
@@ -244,15 +291,54 @@
     return element.dispatchEvent(new Kind(type, { ...init, pointerType: "mouse", isPrimary: true }));
   };
 
+  /** The element at a point of the page, through open shadow roots. */
+  const deepest = (x, y) => {
+    let hit = document.elementFromPoint(x, y);
+    while (hit?.shadowRoot) {
+      const inner = hit.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    return hit;
+  };
+  const within = (outer, inner) => {
+    for (let at = inner; at; at = at.parentNode || at.host) if (at === outer) return true;
+    return false;
+  };
+
+  /** Where real input reaches the control, or what is over it; null when it has no place to click. */
+  const placeOf = (element) => {
+    const rects = element.getClientRects();
+    const rect = rects.length ? rects[0] : null;
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return null;
+    const hit = deepest(x, y);
+    const label = hit?.closest?.("label");
+    if (hit && !within(element, hit) && !within(hit, element) && !label?.contains(element) && label?.control !== element) {
+      const role = roleOf(hit);
+      return { error: `${op.target} is covered by ${role || hit.localName} ${quoted(nameOf(hit) || hit.innerText || "")}: deal with that first.` };
+    }
+    return { point: { x, y } };
+  };
+
   const click = () => {
     const found = target();
     if (found.error) return found;
     const { element } = found;
+    if (isPassword(element)) return { error: HANDS_OFF };
     if (element.disabled) return { error: `${op.target} is disabled.` };
     const role = roleOf(element);
     const kind = role === "button" ? filledKind(scopeOf(element)) : null;
     const asked = (op.declared && ask(op.declared, element)) || (kind && ask(kind, element));
     if (asked) return asked;
+    if (op.trusted) {
+      element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+      // With no box it only takes the page's own click below.
+      const place = placeOf(element);
+      if (place) return place;
+    }
     element.scrollIntoView({ block: "center", inline: "center" });
     pointer(element, "pointerdown");
     pointer(element, "mousedown");
@@ -279,13 +365,14 @@
     const found = target();
     if (found.error) return found;
     const { element } = found;
+    if (isPassword(element)) return { error: HANDS_OFF };
     const role = roleOf(element);
     if (!["textbox", "searchbox", "combobox", "spinbutton"].includes(role)) {
       return { error: `${op.target} isn't a field to type in (it is a ${role || element.localName}).` };
     }
     if (element.disabled || element.readOnly) return { error: `${op.target} can't be typed in now.` };
-    // A password, card or code field asks as what it is, whatever the agent declared, so the
-    // card never shows the secret typed into it.
+    // A card or code field asks as what it is, whatever the agent declared, so the card never
+    // shows the secret typed into it.
     const own = fieldKind(element);
     const kind = own || (op.submit ? filledKind(scopeOf(element), element) : null);
     const asked = (own && ask(own, element)) || (op.declared && ask(op.declared, element)) || (kind && ask(kind, element));
@@ -299,6 +386,10 @@
       element.value = option.value;
       element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
+    } else if (op.trusted && op.text) {
+      // Only where it is: the cursor goes there first, then { kind: "insert" }.
+      const rect = element.getBoundingClientRect();
+      return { point: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } };
     } else if (element.isContentEditable) {
       document.getSelection()?.selectAllChildren(element);
       document.execCommand("insertText", false, op.text);
@@ -317,11 +408,125 @@
     return { done: true };
   };
 
+  /** What an agent's script gave, as text: JSON where it can be, never a field's live value unless the script read one. */
+  const evalAnswer = (value) => {
+    const seen = new WeakSet();
+    const outline = (node) => `<${node.localName}${node.id ? `#${node.id}` : ""}>`;
+    const json = JSON.stringify(value, (_key, item) => {
+      if (typeof item === "bigint") return `${item}n`;
+      if (typeof item === "function") return `(function ${item.name})`;
+      if (typeof item === "symbol") return String(item);
+      if (item instanceof Element) return outline(item);
+      if (item instanceof Error) return `${item.name}: ${item.message}`;
+      if (item && typeof item === "object") {
+        if (seen.has(item)) return "(seen above)";
+        seen.add(item);
+        if (item instanceof Map) return Object.fromEntries(item);
+        if (item instanceof Set) return [...item];
+      }
+      return item;
+    }, 2);
+    return { text: typeof value === "string" ? value : json === undefined ? String(value) : json };
+  };
+
+  /** A picked element for the chat: what it is and where, never what a field holds. The shell scrubs this too. */
+  const describe = (element) => {
+    const password = isPassword(element);
+    const field = element.localName === "input" || element.localName === "textarea" || element.localName === "select" || element.isContentEditable;
+    const attrs = {};
+    for (const { name, value } of element.attributes) {
+      if (name === "value" || name === "style" || name.startsWith("on")) continue;
+      if (password && !["type", "id", "name", "autocomplete"].includes(name)) continue;
+      attrs[name] = cut(value, 200);
+    }
+    const piece = (node) => {
+      if (node.id && /^[A-Za-z][\w-]*$/.test(node.id) && node.getRootNode().querySelectorAll(`#${node.id}`).length === 1) return `#${node.id}`;
+      const siblings = node.parentElement ? [...node.parentElement.children].filter((other) => other.localName === node.localName) : [];
+      return siblings.length > 1 ? `${node.localName}:nth-of-type(${siblings.indexOf(node) + 1})` : node.localName;
+    };
+    const parts = [];
+    for (let node = element; node && node.nodeType === 1 && node.localName !== "html"; node = node.parentElement) {
+      parts.unshift(piece(node));
+      if (parts[0].startsWith("#")) break;
+    }
+    const fiberKey = Object.keys(element).find((key) => key.startsWith("__reactFiber$"));
+    let component = null;
+    for (let fiber = fiberKey ? element[fiberKey] : null; fiber && !component; fiber = fiber.return) {
+      if (typeof fiber.type === "function") component = fiber.type.displayName || fiber.type.name || null;
+    }
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const styles = {};
+    for (const name of ["display", "position", "color", "background-color", "font-size", "font-family", "margin", "padding", "border-radius"]) styles[name] = style.getPropertyValue(name);
+    return {
+      url: location.href,
+      selector: parts.join(" > "),
+      tag: element.localName,
+      attrs,
+      text: field ? "" : cut(clean(element.innerText || element.textContent), 400),
+      password,
+      component,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      styles,
+    };
+  };
+
   try {
     switch (op.kind) {
       case "read": return read(op.max || 20000);
       case "click": return click();
       case "type": return type();
+      case "sweep": {
+        const answer = { fields: [], values: [], width: innerWidth, frames: [] };
+        const plain = (rect) => ({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+        for (const element of each(document)) {
+          if (element.localName === "iframe") {
+            let origin = location.origin;
+            try {
+              if (element.getAttribute("src")) origin = new URL(element.src).origin;
+            } catch { /* The page's own, then. */ }
+            answer.frames.push({ origin: origin === "null" ? location.origin : origin, rect: plain(element.getBoundingClientRect()) });
+          }
+          if (!isPassword(element)) continue;
+          const value = element.isContentEditable ? element.innerText : element.value;
+          if (value) answer.values.push(value);
+          for (const rect of element.getClientRects()) answer.fields.push(plain(rect));
+        }
+        return answer;
+      }
+      case "evalAnswer": return evalAnswer(op.value);
+      case "describe": return describe(op.element);
+      case "void":
+        window.__brigadierRefs = undefined;
+        return { done: true };
+      case "insert": {
+        // The page's own editing, which needs no window focus: a debugger's insertText is routed by the window's.
+        const found = target();
+        if (found.error) return found;
+        const { element } = found;
+        // Looked at again right before: the page may have made it one, or moved the focus to one.
+        const focused = deepFocused();
+        if (isPassword(element) || isPassword(focused)) return { error: HANDS_OFF };
+        if (element.isContentEditable) document.getSelection()?.selectAllChildren(element);
+        else element.select?.();
+        if (!document.execCommand("insertText", false, op.text)) {
+          setValue(element, op.text);
+          element.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: op.text }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        return { done: true };
+      }
+      case "place": {
+        const found = target();
+        if (found.error) return found;
+        if (op.typing) {
+          const focused = deepFocused();
+          if (isPassword(found.element) || isPassword(focused)) return { error: HANDS_OFF };
+          if (!focused || !within(found.element, focused)) return { error: `The page moved the focus away from ${op.target}, so nothing was typed. Read it again.` };
+          return { done: true };
+        }
+        return placeOf(found.element) ?? { error: `${op.target} has no place to click now.` };
+      }
       default: return { error: `unknown op ${op.kind}` };
     }
   } catch (error) {

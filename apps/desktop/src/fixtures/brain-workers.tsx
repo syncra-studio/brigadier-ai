@@ -11,7 +11,7 @@
  * older finishing last), and writes what it saw to
  * #brain-workers-result (BrainWorkersRender.test.ts reads it).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

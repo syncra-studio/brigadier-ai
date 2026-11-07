@@ -1,0 +1,115 @@
+// The browser's security foundations and the record of its guests, from stage 1. Browser features come by
+// section (L4); per-frame loops go in stage 3 (L35).
+import { app, webContents } from "electron";
+
+import { installBrowserData, watchProfileSession } from "./browserClearData";
+import { installBrowserAgent, watchGuest, watchNetwork } from "./browserAgent";
+import { installBrowserImport } from "./browserImport";
+import { installBrowserDevtools, watchDevToolsLinks } from "./browserDevtools";
+import { handleFromApp, isAppPage } from "./appPage";
+import { dev, unfocused } from "./identity";
+import { note } from "./events";
+import { installBrowserBookmarks } from "./browserBookmarks";
+import { guestPasswordsPath, installBrowserVault, installGuestLogins } from "./browserLogins";
+import { installGuestFavicon } from "./guestFavicon";
+import { installGuest, webOrBlank } from "./guestPopups";
+import { installGuestKeys } from "./guestKeys";
+import { applyAppSessionPolicy, applyPermissionPolicy, installPermissionAnswers } from "./permissions";
+import { installProfileStore, isDeleting } from "./profileStore";
+import { isProfilePartition, profilePartition } from "./profiles";
+import { installDurableStorage, keepStorageOf } from "./durableStorage";
+import { keepSessionCookies } from "./sessionCookies";
+import { guestPasskeyPath } from "./windows";
+
+/** The partitions main has named for a profile: the only sessions a guest may have. */
+const profileSessions = new Set<string>();
+
+export function installBrowserHost(): void {
+  installDurableStorage();
+  installProfileStore();
+  installBrowserImport();
+  installPermissionAnswers();
+  installBrowserAgent();
+  installBrowserData();
+  installBrowserDevtools();
+  installGuestFavicon();
+  installBrowserVault();
+  installBrowserBookmarks();
+  app.on("render-process-gone", (_event, contents, details) => {
+    note("render-process-gone", { webContents: contents.id, type: contents.getType(), url: contents.getURL(), ...details });
+  });
+  app.on("child-process-gone", (_event, details) => note("child-process-gone", { ...details }));
+  for (const name of ["browser-window-focus", "browser-window-blur", "did-become-active", "did-resign-active", "activate"] as const) {
+    app.on(name as "activate", () => note(name));
+  }
+
+  app.on("session-created", (created) => {
+    if (!isProfilePartition(created.storagePath)) {
+      applyAppSessionPolicy(created, { note, isAppPage });
+      return;
+    }
+    applyPermissionPolicy(created, { note });
+    keepSessionCookies(created, { note });
+    watchNetwork(created);
+    watchProfileSession(created);
+    if (process.platform === "darwin") created.registerPreloadScript({ type: "frame", filePath: guestPasskeyPath });
+    created.registerPreloadScript({ type: "frame", filePath: guestPasswordsPath });
+    if (unfocused) note("session-unfocused-policy", { path: created.storagePath });
+  });
+
+  app.on("web-contents-created", (_event, contents) => {
+    note("web-contents-created", { webContents: contents.id, type: contents.getType() });
+    keepStorageOf(contents);
+    contents.once("destroyed", () => note("web-contents-destroyed", { webContents: contents.id }));
+    contents.on("unresponsive", () => note("unresponsive", { webContents: contents.id }));
+    contents.on("responsive", () => note("responsive", { webContents: contents.id }));
+    if (dev && contents.getType() !== "webview") {
+      // Reloading the app's page destroys every tab in it, so each load of it is on the record.
+      contents.on("did-start-navigation", (details) => {
+        if (details.isMainFrame) note("host-navigation", { webContents: contents.id, url: details.url, inPlace: details.isSameDocument });
+      });
+      contents.on("console-message", (details) => {
+        if (details.message.startsWith("[vite]")) note("vite-client", { webContents: contents.id, message: details.message.slice(0, 200) });
+        if (details.level === "error") note("console-error", { webContents: contents.id, message: details.message.slice(0, 400), source: details.sourceId?.split("?")[0], line: details.lineNumber });
+      });
+    }
+    if (contents.getType() === "webview") {
+      watchDevToolsLinks(contents);
+      // The Local Network prompt comes from WebRTC's local candidates; dev must show no dialog.
+      if (unfocused) contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
+      installGuestKeys(contents);
+      watchGuest(contents);
+      contents.on("did-start-navigation", (details) => {
+        if (details.isMainFrame) note("guest-navigation", { webContents: contents.id, url: details.url, inPlace: details.isSameDocument, reload: contents.getURL() === details.url });
+      });
+      installGuest(contents);
+      installGuestLogins(contents);
+    }
+    contents.on("will-attach-webview", (attach, preferences, params) => {
+      if (!profileSessions.has(params.partition ?? "") || !webOrBlank(params.src ?? "")) {
+        note("guest-refused", { host: contents.id, partition: params.partition, src: params.src });
+        attach.preventDefault();
+        return;
+      }
+      delete preferences.preload;
+      preferences.nodeIntegration = false;
+      // Sandboxed, so no Node reaches any frame: this only lets the passkey preload run in subframes too.
+      preferences.nodeIntegrationInSubFrames = true;
+      preferences.contextIsolation = true;
+      preferences.sandbox = true;
+      preferences.webSecurity = true;
+      preferences.allowRunningInsecureContent = false;
+    });
+  });
+
+  handleFromApp("brigadier:profile-partition", (_event, profileId: string) => {
+    if (isDeleting(profileId)) throw new Error("This profile is being deleted");
+    const partition = profilePartition(profileId);
+    profileSessions.add(partition);
+    return partition;
+  });
+  handleFromApp("brigadier:guest-info", (_event, id: number) => {
+    const guest = webContents.fromId(id);
+    return guest ? { id, pid: guest.getOSProcessId(), url: guest.getURL() } : null;
+  });
+}

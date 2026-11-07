@@ -2,7 +2,7 @@
  * Settings › Browser over a faked shell and daemon: the rows, Clear, the sub-views and off.
  * (Import Browser Data has its own fixture, browserImport.tsx.)
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -10,11 +10,11 @@ import { BrowserPage } from "@/app/settings/BrowserPage";
 import { TooltipProvider } from "@/components/overlays";
 import type {
   BrowserClear,
-  BrowserDownload,
   BrowserSite,
   BrowserVisit,
   Request,
 } from "@/ipc/generated";
+import type { DownloadRecord } from "@/state/browserData";
 import { useApp } from "@/state/store";
 
 /*
@@ -46,14 +46,16 @@ const VISITS: BrowserVisit[] = [
   { id: 1, url: "https://developer.apple.com/documentation/webkit", title: "", atMs: now - 30 * HOUR, agent: false },
 ];
 
-const DOWNLOADS: BrowserDownload[] = [
+const DOWNLOADS: DownloadRecord[] = [
+  { id: 4, url: "https://example.com/video.mp4", path: "/Users/me/Downloads/video.mp4", atMs: now - 60_000, state: "running", receivedBytes: 5 * 1024 * 1024, totalBytes: 20 * 1024 * 1024 },
+  { id: 3, url: "https://example.com/disk.iso", path: "/Users/me/Downloads/disk.iso", atMs: now - 30 * 60_000, state: "cancelled" },
   { id: 2, url: "https://example.com/report.pdf", path: "/Users/me/Downloads/report.pdf", atMs: now - HOUR, state: "done" },
   { id: 1, url: "https://example.com/big.zip", path: "/Users/me/Downloads/big.zip", atMs: now - 2 * HOUR, state: "failed" },
 ];
 
 const SITES: BrowserSite[] = [
-  { origin: "https://meet.example.com", camera: "allow", microphone: "allow", askedMs: now - HOUR },
-  { origin: "http://localhost:3000", camera: "ask", microphone: "block", askedMs: now - 2 * HOUR },
+  { origin: "https://meet.example.com", camera: "allow", microphone: "allow", location: "ask", askedMs: now - HOUR },
+  { origin: "http://localhost:3000", camera: "ask", microphone: "block", location: "ask", askedMs: now - 2 * HOUR },
 ];
 
 /** What the page asked the shell for, in order: the commands and the arguments that matter. */
@@ -73,13 +75,16 @@ mockIPC(async (command, payload) => {
     case "browser_site_count":
       return 87;
     case "browser_clear":
-      asked.push({ clear: args.clear as BrowserClear });
+      asked.push({ clear: args.clear as BrowserClear, profile: args.profile });
       return null;
     case "browser_history":
       asked.push({ history: args.filter });
       return VISITS.filter((visit) => args.filter === "all" || visit.agent === (args.filter === "agent"));
     case "browser_downloads":
       return DOWNLOADS;
+    case "browser_download_cancel":
+      asked.push({ cancel: args.id, profile: args.profile });
+      return null;
     case "browser_sites":
       return SITES;
     default:
@@ -201,13 +206,20 @@ function Fixture() {
       },
       () => VIEWS.downloads?.(),
       () => {
-        seen.downloads = { title: text(document.querySelector("main h1")), files: all("main li [title]").map((element) => element.title) };
+        seen.downloads = {
+          title: text(document.querySelector("main h1")),
+          files: all("main li [title]").map((element) => element.title),
+          lines: all("main li .text-xs.truncate").map(text),
+          bars: all<HTMLProgressElement>("main li progress").map((bar) => [bar.value, bar.max]),
+          cancels: all("main li button").filter((element) => text(element) === "Cancel").length,
+        };
+        button("Cancel", document.querySelector("main") ?? document)?.click();
         seen.downloadEdges = all("main li").map(rowEdges);
         button("Browser")?.click();
       },
       () => VIEWS.sites?.(),
       () => {
-        seen.sites = { title: text(document.querySelector("main h1")), choices: [text(button("Camera for http://localhost:3000")), text(button("Microphone for http://localhost:3000"))] };
+        seen.sites = { title: text(document.querySelector("main h1")), group: text(document.querySelector("main")).includes("Camera, microphone and location"), choices: [text(button("Camera for http://localhost:3000")), text(button("Microphone for http://localhost:3000")), text(button("Location for http://localhost:3000"))] };
         seen.siteEdges = all("main li").map(rowEdges);
         button("Browser")?.click();
       },

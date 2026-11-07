@@ -12,7 +12,7 @@
  * frame: the note turn and its goal 13 fix running, the seam closed, then the successor carrying
  * on (core-goals D120).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

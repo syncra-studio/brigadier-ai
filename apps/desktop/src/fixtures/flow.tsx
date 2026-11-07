@@ -10,7 +10,7 @@
  * `update=1` (with `view=done`: a late event's update line under the answer). `window.flow`
  * holds the stores for probes.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { threadOf } from "@/fixtures/workerRows";
 import { createRoot } from "react-dom/client";
 

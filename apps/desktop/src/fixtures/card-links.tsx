@@ -6,7 +6,7 @@
  * real drags, clicks and keys, and writes what it saw as JSON into `#card-links-result`
  * (CardLinksRender.test.ts). This entry is absent from the production build.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { type ReactNode, useEffect } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";

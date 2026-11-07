@@ -131,7 +131,9 @@ pub fn open_computer_setup(app: AppHandle) {
 /// The setup window's feed: computer use's status as it changes.
 #[tauri::command]
 pub fn computer_setup_subscribe(state: State<'_, AppState>, channel: Channel<BridgeEvent>) {
-    state.bridge.attach_setup_ui(channel);
+    state.bridge.attach_setup_ui(Box::new(move |event| {
+        let _ = channel.send(event);
+    }));
 }
 
 /// The placed helper app, which System Settings lists.

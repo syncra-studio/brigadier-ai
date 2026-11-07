@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/ipc/native";
 
 import type {
   BrowserClear,
@@ -19,12 +19,14 @@ export const HISTORY_PAGE = 200;
 
 /** History newest first; `after` (the last visit shown) asks for the next page. */
 export function browserHistory(
+  profile: string,
   query: string,
   filter: HistoryFilter,
   after: BrowserVisit | null,
   limit = HISTORY_PAGE,
 ): Promise<BrowserVisit[]> {
   return invoke<BrowserVisit[]>("browser_history", {
+    profile,
     query,
     filter,
     beforeMs: after?.atMs ?? null,
@@ -33,22 +35,48 @@ export function browserHistory(
   });
 }
 
-export function removeHistory(ids: number[]): Promise<void> {
-  return invoke("browser_history_remove", { ids });
+export function removeHistory(profile: string, ids: number[]): Promise<void> {
+  return invoke("browser_history_remove", { profile, ids });
 }
 
-export function browserDownloads(query: string): Promise<BrowserDownload[]> {
-  return invoke<BrowserDownload[]>("browser_downloads", { query });
+/** A download as the shell lists it: while running, its bytes so far and in all (0: not known). */
+export type DownloadRecord = Omit<BrowserDownload, "state"> & {
+  state: BrowserDownload["state"] | "cancelled";
+  receivedBytes?: number;
+  totalBytes?: number;
+};
+
+export function browserDownloads(profile: string, query: string): Promise<DownloadRecord[]> {
+  return invoke<DownloadRecord[]>("browser_downloads", { profile, query });
 }
 
 /** Opens a finished download with the system's app for its type. */
-export function openDownload(id: number): Promise<void> {
-  return invoke("browser_download_open", { id });
+export function openDownload(profile: string, id: number): Promise<void> {
+  return invoke("browser_download_open", { profile, id });
 }
 
 /** Forgets downloads (the files stay): `ids`, or every finished one. */
-export function removeDownloads(ids: number[] | null): Promise<void> {
-  return invoke("browser_downloads_remove", { ids });
+export function removeDownloads(profile: string, ids: number[] | null): Promise<void> {
+  return invoke("browser_downloads_remove", { profile, ids });
+}
+
+/** Stops a running download; its partial file goes. */
+export function cancelDownload(profile: string, id: number): Promise<void> {
+  return invoke("browser_download_cancel", { profile, id });
+}
+
+const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"];
+
+function bytesText(bytes: number): string {
+  const unit = Math.min(Math.floor(Math.log(Math.max(bytes, 1)) / Math.log(1000)), BYTE_UNITS.length - 1);
+  const value = bytes / 1000 ** unit;
+  return `${unit === 0 || value >= 100 ? Math.round(value) : value.toFixed(1)} ${BYTE_UNITS[unit]}`;
+}
+
+/** How far a running download is, for its row: "45% · 2.3 MB of 5.1 MB". */
+export function downloadProgress({ receivedBytes = 0, totalBytes = 0 }: DownloadRecord): string {
+  if (totalBytes <= 0) return bytesText(receivedBytes);
+  return `${Math.floor((receivedBytes / totalBytes) * 100)}% · ${bytesText(receivedBytes)} of ${bytesText(totalBytes)}`;
 }
 
 /** A page's site as the lists show it: its host without "www.". */
@@ -91,13 +119,13 @@ export function byDay<T extends { atMs: number }>(items: readonly T[], nowMs: nu
 }
 
 /** Removes what Clear browsing data picked. */
-export function clearBrowsingData(clear: BrowserClear): Promise<void> {
-  return invoke("browser_clear", { clear });
+export function clearBrowsingData(profile: string, clear: BrowserClear): Promise<void> {
+  return invoke("browser_clear", { profile, clear });
 }
 
 /** How many sites the browser keeps cookies or other data for; null where it can't tell. */
-export function siteDataCount(): Promise<number | null> {
-  return invoke<number | null>("browser_site_count");
+export function siteDataCount(profile: string): Promise<number | null> {
+  return invoke<number | null>("browser_site_count", { profile });
 }
 
 export type ClearRange = "hour" | "day" | "week" | "month" | "all";
@@ -114,14 +142,16 @@ export function rangeStart(range: ClearRange, nowMs: number): number | null {
   return range === "all" ? null : nowMs - RANGE_MS[range];
 }
 
-export function browserSites(): Promise<BrowserSite[]> {
-  return invoke<BrowserSite[]>("browser_sites");
+/** The sites that asked in `profile`: permissions are each profile's own. */
+export function browserSites(profile: string): Promise<BrowserSite[]> {
+  return invoke<BrowserSite[]>("browser_sites", { profile });
 }
 
-/** Sets what a site may use without asking: its camera, its microphone, or both. */
+/** Sets what a site may use without asking: its camera, its microphone, its location. */
 export function setSite(
+  profile: string,
   origin: string,
-  choice: { camera?: SitePermission; microphone?: SitePermission },
+  choice: { camera?: SitePermission; microphone?: SitePermission; location?: SitePermission },
 ): Promise<void> {
-  return invoke("browser_site_set", { origin, camera: choice.camera ?? null, microphone: choice.microphone ?? null });
+  return invoke("browser_site_set", { profile, origin, camera: choice.camera ?? null, microphone: choice.microphone ?? null, location: choice.location ?? null });
 }

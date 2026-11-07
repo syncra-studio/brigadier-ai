@@ -5,7 +5,7 @@
  * real keys (`fixtureInput`) and checks what each send carries. What it saw goes as JSON into
  * `<pre id="rich-composer-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

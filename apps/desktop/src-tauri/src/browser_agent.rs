@@ -75,6 +75,26 @@ pub async fn browser_agent(
     }
 }
 
+/// An agent begins or stops acting in tab `id`: only the Electron shell holds anything for it.
+#[tauri::command]
+pub fn browser_agent_drive(id: String, on: bool, resumed: bool) {
+    let _ = (id, on, resumed);
+}
+
+/// What happened in tab `id`: only the Electron shell can tell.
+#[tauri::command]
+pub fn browser_agent_events(
+    id: String,
+    since: u64,
+    kinds: Vec<String>,
+) -> Result<serde_json::Value, IpcError> {
+    let _ = (id, since, kinds);
+    Err(IpcError {
+        code: brigadier_ipc::protocol::ErrorCode::Invalid,
+        message: "This build can't tell what happens in a tab.".into(),
+    })
+}
+
 /// Opens `url` in tab `id`'s page where it is, without moving or showing it.
 #[tauri::command]
 pub fn browser_agent_load(id: String, url: String) -> Result<(), IpcError> {

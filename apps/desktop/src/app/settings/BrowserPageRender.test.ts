@@ -15,22 +15,25 @@ test("browser settings: rows, clear, history, downloads, sites, off", { timeout:
   const seen = JSON.parse(await renderFixturePage(t, "browser.html?drive=1", "browser-result", 20000)) as Record<string, unknown>;
   assert.deepEqual(seen.on, {
     title: "Browser",
-    sections: ["General", "Downloads", "Browser permissions"],
+    sections: ["Profiles", "General", "Passwords and bookmarks", "Downloads", "Browser permissions"],
     rows: [
       "Browser",
+      "New sessions start on",
       "Open web links in",
       "Open local dev URLs in",
       "Show full URL",
       "Browsing data",
       "Browsing history",
+      "Saved passwords",
+      "Bookmarks",
       "Location",
       "Ask where to save downloads",
       "Download history",
       "Site settings",
     ],
   });
-  // Import has a page of its own now.
-  assert.equal(seen.importButton, false);
+  // Import has a page of its own; the Profiles section's button goes there.
+  assert.equal(seen.importButton, true);
   // Web links open in the default browser and local ones in Brigadier's, until changed.
   assert.deepEqual(seen.links, ["Your default browser", "Brigadier's browser"]);
   assert.deepEqual(seen.linkChoices, ["Brigadier's browser", "Your default browser"]);
@@ -60,11 +63,15 @@ test("browser settings: rows, clear, history, downloads, sites, off", { timeout:
   assert.deepEqual(seen.filters, ["All", "Agent", "Other"]);
   assert.deepEqual(seen.agentVisits, ["http://localhost:5173/checkout"]);
   assert.equal(seen.repicked, "Browser");
+  // Running: its progress, a bar and Cancel; cancelled and failed say so; done says nothing.
   assert.deepEqual(seen.downloads, {
     title: "Download history",
-    files: ["/Users/me/Downloads/report.pdf", "/Users/me/Downloads/big.zip"],
+    files: ["/Users/me/Downloads/video.mp4", "/Users/me/Downloads/disk.iso", "/Users/me/Downloads/report.pdf", "/Users/me/Downloads/big.zip"],
+    lines: ["Downloading · 25% · 5.2 MB of 21.0 MB · example.com", "Cancelled · example.com", "example.com", "Failed · example.com"],
+    bars: [[5 * 1024 * 1024, 20 * 1024 * 1024]],
+    cancels: 1,
   });
-  assert.deepEqual(seen.sites, { title: "Site settings", choices: ["Ask", "Block"] });
+  assert.deepEqual(seen.sites, { title: "Site settings", group: true, choices: ["Ask", "Block", "Ask"] });
 
   // Every list's rows sit as far in from their card's edges as a Settings row does.
   const inset = seen.rowEdges as number[];
@@ -90,9 +97,11 @@ test("browser settings: rows, clear, history, downloads, sites, off", { timeout:
   // What reached the shell and the daemon, in order.
   assert.deepEqual(seen.asked, [
     settings(true),
-    { clear: { sinceMs: null, history: true, cookies: true, cache: false, downloads: true, sites: false } },
+    // Opened from the page itself, for the default profile.
+    { clear: { sinceMs: null, history: true, cookies: true, cache: false, downloads: true, sites: false }, profile: "default" },
     { history: "all" },
     { history: "agent" },
+    { cancel: 4, profile: "default" },
     settings(false),
   ]);
 });

@@ -6,13 +6,9 @@
 //! and the quit order.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod bridge;
 mod browser;
 mod browser_agent;
-#[cfg(any(target_os = "macos", test))]
-mod browser_grants;
 mod browser_import;
-mod browser_store;
 mod computer_menu;
 mod computer_setup;
 mod documents;
@@ -25,13 +21,9 @@ mod intro;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod browser_ui;
-mod launcher;
 mod login_item;
 mod notifications;
-mod opening;
-mod reports;
 mod shell;
-mod simulator;
 mod smoke;
 mod updates;
 #[allow(unsafe_code)]
@@ -45,13 +37,16 @@ use brigadier_core::{ConventionsExport, ProjectId};
 use brigadier_ipc::app::{AppInfo, BridgeEvent, RunningChat, SmokeReport, UiMeasurements};
 use brigadier_ipc::protocol::{IpcError, Request, Response};
 use brigadier_sandbox::{Platform, PlatformOptions};
+#[cfg(target_os = "macos")]
+use brigadier_shell_native::browser_grants;
+use brigadier_shell_native::{bridge, browser_store, launcher, opening};
 use tauri::ipc::Channel;
 use tauri::{Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::bridge::{Bridge, Notify};
+use crate::bridge::{Bridge, Hooks, Notify};
 use crate::launcher::Launcher;
 
 /// Environment variable carrying the timing tolerance (shared with the daemon).
@@ -113,6 +108,18 @@ fn quit_app(app: tauri::AppHandle) {
     shell::quit(&app, 0);
 }
 
+/// The latest continuity report (Settings › Reports).
+#[tauri::command]
+async fn get_continuity_report() -> Result<serde_json::Value, String> {
+    brigadier_shell_native::reports::get_continuity_report().await
+}
+
+/// Opens an iOS simulator preview's card in the Simulator app.
+#[tauri::command]
+async fn open_simulator(device: Option<String>) -> Result<(), IpcError> {
+    brigadier_shell_native::simulator::open_simulator(device).await
+}
+
 /// The window saved its pages' pending edits, as a quit's `flush-pages` asked with `token`.
 #[tauri::command]
 fn pages_flushed(token: u64) {
@@ -145,7 +152,9 @@ fn open_notification_settings(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn ipc_subscribe(state: State<'_, AppState>, channel: Channel<BridgeEvent>) {
-    state.bridge.attach_ui(channel);
+    state.bridge.attach_ui(Box::new(move |event| {
+        let _ = channel.send(event);
+    }));
 }
 
 /// Asks for a folder with the system picker; `None` when the user cancels. The dialog plugin
@@ -785,12 +794,17 @@ fn main() {
             visuals::install(app.handle());
             browser::set_data_dir(&platform.paths().data_dir);
             let launcher = Launcher::new(platform.clone(), daemon_env);
+            let _runtime = tauri::async_runtime::handle().inner().enter();
             let bridge = Bridge::start(
                 platform.clone() as Arc<dyn Platform>,
                 launcher,
-                notifier(app.handle().clone()),
-                in_front(app.handle().clone()),
-                open_setup(app.handle().clone()),
+                Hooks {
+                    notify: notifier(app.handle().clone()),
+                    in_front: in_front(app.handle().clone()),
+                    open_setup: open_setup(app.handle().clone()),
+                    computer_use_changed: Box::new(computer_menu::status_changed),
+                    is_quitting: Box::new(shell::is_quitting),
+                },
             );
             computer_menu::install(app.handle());
             app.manage(documents::Documents::default());
@@ -877,7 +891,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            reports::get_continuity_report,
+            get_continuity_report,
             documents::save_document,
             downloads::save_copy,
             drops::drag_shift,
@@ -914,7 +928,7 @@ fn main() {
             open_folder,
             open_url,
             open_pdf,
-            simulator::open_simulator,
+            open_simulator,
             system_name,
             reveal_path,
             set_running_chats,
@@ -938,6 +952,8 @@ fn main() {
             browser_agent::browser_agent,
             browser_agent::browser_agent_load,
             browser_agent::browser_agent_capture,
+            browser_agent::browser_agent_drive,
+            browser_agent::browser_agent_events,
             browser::browser_print,
             browser::browser_snapshot,
             browser::browser_focus,

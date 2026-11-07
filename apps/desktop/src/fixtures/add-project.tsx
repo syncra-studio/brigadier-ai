@@ -10,7 +10,7 @@
  * shared ones and writes their looks to #add-project-look. Without any the page stays as it
  * opens, for screenshots.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
