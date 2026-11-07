@@ -282,7 +282,40 @@ pub(super) fn failed(err: impl std::fmt::Display) -> CliReply {
     CliReply::error(ErrorCode::Failed, err.to_string())
 }
 
+/// `BROWSER` in an agent's shell, for `vite --open`, `"$BROWSER" <url>` and the like. Its tool
+/// commands run with no terminal, so the terminal's own `BROWSER` (`terminals.rs`) can't reach
+/// the app; this asks with the session's grant instead. The daemon refuses when the user's local
+/// links open elsewhere, and any refusal or failure goes to the default browser.
+pub(crate) const AGENT_BROWSER_SHIM: &str = r#"#!/bin/sh
+case "$1" in
+  http://localhost*|https://localhost*|http://127.*|https://127.*|http://0.0.0.0*|http://\[::1\]*|http://*.localhost*)
+    if brigadier browser open --keep --dev-url "$1" >/dev/null 2>&1; then exit 0; fi ;;
+esac
+if command -v open >/dev/null 2>&1; then exec open "$1"; fi
+exec xdg-open "$1"
+"#;
+
 impl SessionManager {
+    /// The agent's `BROWSER`, unless the user chose their own, on the systems whose agents can
+    /// open a tab. A shell without it still works, so a failure here isn't reported.
+    fn agent_browser(&self) -> Option<String> {
+        if !cfg!(target_os = "macos") || self.runtime.cli_env().var("BROWSER").is_some() {
+            return None;
+        }
+        let folder = std::env::temp_dir().join(format!("brigadier-open-{}", std::process::id()));
+        let shim = folder.join("agent-browser");
+        if std::fs::read_to_string(&shim).ok().as_deref() != Some(AGENT_BROWSER_SHIM) {
+            std::fs::create_dir_all(&folder).ok()?;
+            std::fs::write(&shim, AGENT_BROWSER_SHIM).ok()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o700)).ok()?;
+            }
+        }
+        Some(shim.to_string_lossy().into_owned())
+    }
+
     /// What a thread's, Chat's, side chat's or worker's CLI gets so `brigadier` (and every command it runs)
     /// knows who calls and finds the daemon: the session's id and live `grant`, the data folder
     /// when it isn't the installed app's, and the folder `brigadier` ships in first on `PATH`.
@@ -310,6 +343,9 @@ impl SessionManager {
             if let Ok(path) = std::env::join_paths(dirs) {
                 env.push(("PATH".to_owned(), path.to_string_lossy().into_owned()));
             }
+        }
+        if let Some(shim) = self.agent_browser() {
+            env.push(("BROWSER".to_owned(), shim));
         }
         let wrapper = brigadier_sandbox::build_slots::wrapper_path(&self.data_dir);
         if self.config.build_slots_ready && wrapper.is_file() {

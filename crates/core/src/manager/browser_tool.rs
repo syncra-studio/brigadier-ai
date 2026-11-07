@@ -21,7 +21,8 @@ use crate::browser::{
     BrowserApproved, BrowserGo, BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult,
     BrowserSensitive,
 };
-use crate::tools::{BrowserAsks, BrowserStep, BrowserToolCall, ToolReply};
+use crate::model::LinkTarget;
+use crate::tools::{BrowserAsks, BrowserOpen, BrowserStep, BrowserToolCall, ToolReply};
 use crate::work::{Approval, ApprovalSubject, CardState, InjectionKind};
 use crate::{ConversationId, TaskId};
 
@@ -490,6 +491,29 @@ pub(crate) fn details(
     format!("{doing}\nOn {url}")
 }
 
+/// Whether `url`'s host is one a local development server answers on: the app's `localUrl`
+/// (apps/desktop/src/state/linkRouting.ts).
+fn local_address(url: &str) -> bool {
+    let Some((_, rest)) = url.trim().split_once("://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    let host = host.to_ascii_lowercase();
+    if host.starts_with("[::1]") {
+        return matches!(host["[::1]".len()..].chars().next(), None | Some(':'));
+    }
+    let host = host.split(':').next().unwrap_or_default();
+    let loopback = host.strip_prefix("127.").is_some_and(|rest| {
+        let parts: Vec<&str> = rest.split('.').collect();
+        parts.len() == 3
+            && parts
+                .iter()
+                .all(|part| (1..=3).contains(&part.len()) && part.parse::<u8>().is_ok())
+    });
+    host == "localhost" || host.ends_with(".localhost") || host == "0.0.0.0" || loopback
+}
+
 /// `url` when it is a web address the tab may load.
 fn web_address(url: &str) -> Result<String, String> {
     let url = url.trim();
@@ -591,6 +615,19 @@ impl SessionManager {
             return ToolReply::error(
                 "Only the thread brings a tab to the front, when the user asks to see it.",
             );
+        }
+        if let BrowserToolCall::Open(BrowserOpen {
+            url, dev_url: true, ..
+        }) = &call
+        {
+            if !local_address(url) {
+                return ToolReply::error(format!("{url} isn't a local address."));
+            }
+            if self.core.settings().local_links_in != LinkTarget::Brigadier {
+                return ToolReply::error(
+                    "Local links open in the default browser (Settings › Browser).",
+                );
+            }
         }
         let request = match &call {
             BrowserToolCall::Open(_) => self.request_for(&conversation_id).await,
@@ -957,6 +994,99 @@ mod tests {
 
     fn read(tab: &str) -> BrowserOp {
         BrowserOp::Read { tab: tab.into() }
+    }
+
+    #[test]
+    fn a_script_the_user_could_not_read_on_its_card_is_refused() {
+        assert_eq!(
+            shown_script("  \n".into()).unwrap_err(),
+            "browser_eval needs a script."
+        );
+        let long = "a".repeat(SCRIPT_MOST + 1);
+        assert!(shown_script(long).unwrap_err().contains("the most"));
+        for hidden in ["\u{200b}", "\u{202e}", "\u{2066}", "\u{feff}", "\u{7}"] {
+            let script = format!("return 1;{hidden}");
+            assert!(
+                shown_script(script)
+                    .unwrap_err()
+                    .contains("invisible characters"),
+                "{hidden:?}"
+            );
+        }
+        let plain = "const a = 1;\n\treturn a;\r\n".to_owned();
+        assert_eq!(shown_script(plain.clone()).unwrap(), plain);
+        let most = "a".repeat(SCRIPT_MOST);
+        assert_eq!(shown_script(most.clone()).unwrap(), most);
+    }
+
+    #[test]
+    fn an_eval_s_yes_is_for_its_own_script() {
+        let hub = BrowserHub::default();
+        let eval = |script: &str| BrowserOp::Eval {
+            tab: "t".into(),
+            script: script.into(),
+            guard: BrowserGuard::default(),
+        };
+        let one = hub.fingerprint(&eval("return 1")).unwrap();
+        assert_eq!(hub.fingerprint(&eval("return 1")).unwrap(), one);
+        assert_ne!(hub.fingerprint(&eval("return 2")).unwrap(), one);
+        assert!(!one.contains("return"));
+    }
+
+    #[test]
+    fn an_eval_card_says_where_it_runs_and_shows_the_script_as_it_is() {
+        let script = "return `a`;\n\nreturn 2";
+        let op = BrowserOp::Eval {
+            tab: "t".into(),
+            script: script.into(),
+            guard: BrowserGuard::default(),
+        };
+        let url = "https://shop.example/checkout";
+        assert_eq!(
+            question(BrowserSensitive::Script, url),
+            "Run this script on shop.example?"
+        );
+        let text = details(&op, BrowserSensitive::Script, "", url);
+        let (first, rest) = text.split_once("\n\n").unwrap();
+        assert!(
+            first.starts_with("On https://shop.example/checkout. It can do anything"),
+            "{first}"
+        );
+        assert!(
+            first.contains("scrubbed from its answer only as written"),
+            "{first}"
+        );
+        assert_eq!(rest, script);
+    }
+
+    #[test]
+    fn a_local_address_is_what_the_app_calls_local() {
+        for url in [
+            "http://localhost:4173/",
+            "https://LOCALHOST/",
+            "http://localhost",
+            "http://127.0.0.1:5199/x",
+            "http://127.255.0.9",
+            "http://0.0.0.0:3000",
+            "http://[::1]:3000/",
+            "http://[::1]",
+            "http://app.localhost:80/?a=b",
+            "http://me@localhost/",
+        ] {
+            assert!(local_address(url), "{url}");
+        }
+        for url in [
+            "https://example.com/",
+            "http://localhost.evil.example/",
+            "http://localhost@evil.example/",
+            "http://127.0.0.1.evil.example/",
+            "http://127.0.0.256/",
+            "http://example.com/?x=http://localhost/",
+            "http://[::1].evil.example/",
+            "localhost:3000",
+        ] {
+            assert!(!local_address(url), "{url}");
+        }
     }
 
     fn conversation() -> ConversationId {

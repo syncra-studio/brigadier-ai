@@ -972,6 +972,31 @@ mod tests {
     /// A folder in the temp directory, removed when dropped however the test ends.
     struct Temp(PathBuf);
 
+    #[cfg(unix)]
+    #[test]
+    fn a_shell_s_browser_is_the_shim_with_the_apps_token_unless_the_user_chose_their_own() {
+        let terminals = Terminals::new();
+        let mut command = portable_pty::CommandBuilder::new("/bin/sh");
+        command.env_remove("BROWSER");
+        terminals.browser_env(&mut command);
+        let own = std::env::var_os("BROWSER").is_some();
+        let token = command.get_env("BRIGADIER_OPEN_TOKEN");
+        if own {
+            assert!(token.is_none());
+            return;
+        }
+        assert_eq!(
+            token.and_then(|token| token.to_str()),
+            Some(terminals.open_token.as_str())
+        );
+        assert!(!terminals.open_token.is_empty());
+        let shim = command.get_env("BROWSER").unwrap();
+        let body = std::fs::read_to_string(shim).unwrap();
+        assert_eq!(body, super::BROWSER_SHIM);
+        assert!(body.contains("7733"), "{body}");
+        assert_ne!(Terminals::new().open_token, terminals.open_token);
+    }
+
     impl std::ops::Deref for Temp {
         type Target = Path;
 

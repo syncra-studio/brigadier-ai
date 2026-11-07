@@ -115,4 +115,27 @@ hiddenWrapper.innerHTML = 'Hidden wrapper text<p style="visibility: visible">Sho
 document.body.append(hiddenWrapper);
 seen.hiddenContents = (agent({ kind: "read", max: 20000 }) as { text: string }).text.split("\n").slice(-2);
 
+// What a script gave, as text, whatever it was (the fixture passes live values, as the shell's run does).
+const live = (op: Record<string, unknown>): Answer => {
+  const named = "__agentLiveValue";
+  (window as unknown as Record<string, unknown>)[named] = op.value ?? op.element;
+  const key = op.kind === "describe" ? "element" : "value";
+  // oxlint-disable-next-line no-eval
+  return (0, eval)(`(${source.trim().replace(/;$/, "")})({ kind: ${JSON.stringify(op.kind)}, ${key}: window.${named} })`) as Answer;
+};
+const cycle: Record<string, unknown> = { name: "loop" };
+cycle.self = cycle;
+seen.evalCycle = live({ kind: "evalAnswer", value: cycle });
+seen.evalElement = live({ kind: "evalAnswer", value: { field: byId("email") } });
+seen.evalBigint = live({ kind: "evalAnswer", value: { big: 12n } });
+seen.evalUndefined = live({ kind: "evalAnswer", value: undefined });
+seen.evalString = live({ kind: "evalAnswer", value: "plain" });
+
+// A picked element: what it is and where, never what it holds.
+byId<HTMLInputElement>("name").value = "Ada Lovelace";
+byId<HTMLInputElement>("password").value = "hunter2";
+seen.describeName = live({ kind: "describe", element: byId("name") });
+seen.describePassword = live({ kind: "describe", element: byId("password") });
+seen.describeButton = live({ kind: "describe", element: byId("add") });
+
 byId("agent-browser-result").textContent = JSON.stringify(seen);

@@ -636,6 +636,11 @@ pub const COMMANDS: &[Command] = &[
                 "keep",
                 "open: the page is for the user, so the tab stays open.",
             ),
+            switch(
+                "dev-url",
+                "open: what `$BROWSER` asks for a dev server: refused unless the address is \
+                 local and the user's local links open in Brigadier.",
+            ),
             choice(
                 "go",
                 "STEP",

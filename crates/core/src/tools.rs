@@ -449,6 +449,11 @@ pub struct BrowserOpen {
     /// the tab closes when this request ends.
     #[serde(default)]
     pub keep: bool,
+    /// Asked by a dev server's `BROWSER` (see `cli.rs`), not by an agent's choice: refused unless
+    /// `url` is local and the user's local links open in Brigadier, so it goes to the default
+    /// browser instead.
+    #[serde(default)]
+    pub dev_url: bool,
 }
 
 /// `browser_read`, `browser_screenshot`, `browser_close`: one of your tabs.

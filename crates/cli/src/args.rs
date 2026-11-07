@@ -703,6 +703,9 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
                 "open" => {
                     put("url", one("url", true)?);
                     put("keep", Some(json!(args.switch("keep"))));
+                    if args.switch("dev-url") {
+                        put("dev_url", Some(json!(true)));
+                    }
                 }
                 "navigate" => match (one("url", false)?, args.flag("go")) {
                     (Some(_), Some(_)) => return Err(error("a URL or --go, not both")),
@@ -1488,6 +1491,17 @@ mod tests {
         assert_eq!(
             tool(&["browser", "open", "https://example.com"]).2,
             json!({"url": "https://example.com", "keep": false})
+        );
+        assert_eq!(
+            tool(&[
+                "browser",
+                "open",
+                "http://localhost:1/",
+                "--keep",
+                "--dev-url"
+            ])
+            .2,
+            json!({"url": "http://localhost:1/", "keep": true, "dev_url": true})
         );
         assert_eq!(
             tool(&["browser", "navigate", "--tab", "t", "--go", "back"]).2,

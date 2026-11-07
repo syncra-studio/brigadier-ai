@@ -66,4 +66,7 @@ export const browserCommands: Record<string, (args: Args) => unknown> = {
   browser_device_clear: (args) => window.brigadierShell.devtools("deviceClear", { guest: agentPage(args.id as string).guest }),
   browser_pick: (args) => window.brigadierShell.devtools("pick", { guest: agentPage(args.id as string).guest }),
   browser_pick_stop: (args) => window.brigadierShell.devtools("pickStop", { guest: agentPage(args.id as string).guest }),
+  browser_import_sources: () => [],
+  browser_import: () => null,
+  browser_import_open_access: () => null,
 };
