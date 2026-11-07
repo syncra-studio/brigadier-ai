@@ -27,7 +27,7 @@ const COMMAND_ALT: Record<string, string> = {
 function typed({ key, code, alt }: Press): string {
   const place = /^Key([A-Z])$/.exec(code)?.[1]?.toLowerCase() ?? /^Digit(\d)$/.exec(code)?.[1];
   if (alt) return place ?? key.toLowerCase();
-  if (key.length === 1 && key >= " " && key <= "~" && !/^Digit/.test(code)) return key.toLowerCase();
+  if (key.length === 1 && key >= " " && key <= "~" && !code.startsWith("Digit")) return key.toLowerCase();
   return place ?? key.toLowerCase();
 }
 

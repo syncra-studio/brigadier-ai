@@ -104,9 +104,9 @@ export function forgetSecrets(guest: number): void {
 }
 
 function scrubText(text: string, values: readonly string[]): string {
-  let scrubbed = text;
-  for (const value of values) scrubbed = scrubbed.split(value).join(HIDDEN);
-  return scrubbed;
+  let clean = text;
+  for (const value of values) clean = clean.split(value).join(HIDDEN);
+  return clean;
 }
 
 /** `answer` with every value known on the tab taken out of its strings, as written and as an address or form writes it. */
@@ -119,7 +119,7 @@ export function scrubbed<T>(guest: number, answer: T): T {
     forms.add(encodeURIComponent(value));
     forms.add(encodeURIComponent(value).replace(/%20/g, "+"));
   }
-  const values = [...forms].sort((a, b) => b.length - a.length);
+  const values = [...forms].toSorted((a, b) => b.length - a.length);
   const walk = (value: unknown): unknown => {
     if (typeof value === "string") return scrubText(value, values);
     if (Array.isArray(value)) return value.map(walk);

@@ -1,0 +1,185 @@
+name: Electron real pages
+
+# The Electron app on all three OSes, as built for users: real public pages in its <webview>, each process's sandbox
+# read from the OS, H.264 and AAC from a local file, Saved data's Keychain item on a throwaway Keychain, and what each
+# download and install really weighs. Signing isn't here: these builds are unsigned, for checks and for trying by hand.
+on:
+  pull_request:
+    paths:
+      - apps/desktop/**
+      - crates/**
+      - helpers/computer-use/**
+      - tools/browser-check/**
+      - Cargo.lock
+      - pnpm-lock.yaml
+      - .github/workflows/electron-real-pages.yml
+  workflow_dispatch:
+
+concurrency:
+  group: electron-real-pages-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.98.1"
+  # Shared runners are noisy: as ci.yml, timing budgets only.
+  BRIGADIER_BUDGET_TOLERANCE: "3"
+
+jobs:
+  real-pages:
+    name: Real pages (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS Apple silicon, os: macos-latest, arch: arm64 }
+          - { name: macOS Intel, os: macos-15-intel, arch: x64 }
+          - { name: Windows, os: windows-latest, arch: x64, lto: "false", units: "16" }
+          - { name: Linux, os: ubuntu-24.04, arch: x64, lto: "false", units: "16" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    env:
+      # As nightly.yml's Windows and Linux builds; the Mac's keeps the shipped profile.
+      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.lto || 'thin' }}
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ matrix.units || '1' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Windows Cargo files on ReFS
+        if: runner.os == 'Windows'
+        uses: samypr100/setup-dev-drive@562171fe8df7401fdf582d766cd3b6ab80d5b1a0 # v4
+        with:
+          drive-size: 64GB
+          drive-type: Dynamic
+          drive-format: ReFS
+          mount-path: ${{ github.workspace }}/../dev-drive
+          env-mapping: |
+            CARGO_HOME,{{ DEV_DRIVE }}/.cargo
+            CARGO_TARGET_DIR,{{ DEV_DRIVE }}/target
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        timeout-minutes: 12
+        run: |
+          packages=(libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev xvfb dbus libnss3 libgbm1 libasound2t64 libfuse2t64)
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y "${packages[@]}"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: electron-real-pages-${{ matrix.os }}
+          workspaces: . -> ${{ runner.os == 'Windows' && '../dev-drive/target' || 'target' }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build what users download
+        working-directory: apps/desktop
+        run: node electron/dist.mjs --arch ${{ matrix.arch }}
+      - name: Build the check package
+        # The same app but for main's dev switches, which is how the script can drive it.
+        working-directory: apps/desktop
+        run: node electron/dist.mjs --arch ${{ matrix.arch }} --check | tee "$RUNNER_TEMP/check-build.log"
+      - name: Size
+        run: node tools/browser-check/package-report.mjs "${CARGO_TARGET_DIR:-target}/electron-dist/${{ matrix.arch }}"
+      - name: A throwaway Keychain on the Mac
+        if: runner.os == 'macOS'
+        run: |
+          keychain="$RUNNER_TEMP/scratch.keychain-db"
+          security create-keychain -p scratch "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p scratch "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -d user -s "$keychain"
+          echo "BRIGADIER_REAL_KEYCHAIN=1" >>"$GITHUB_ENV"
+          echo "BRIGADIER_SCRATCH_KEYCHAIN=$keychain" >>"$GITHUB_ENV"
+      - name: Real pages
+        env:
+          BRIGADIER_CHECK_OUT: ${{ runner.temp }}/real-pages
+        run: |
+          package="$(tail -n 1 "$RUNNER_TEMP/check-build.log")"
+          if [ "$RUNNER_OS" = Linux ]; then
+            # What the deb's own install does when user namespaces are off. Ubuntu 24.04 restricts them by AppArmor.
+            sudo chown root:root "$package/chrome-sandbox"
+            sudo chmod 4755 "$package/chrome-sandbox"
+            dbus-run-session -- xvfb-run -a --server-args="-screen 0 1400x900x24" node tools/browser-check/real-pages.mjs --package "$package"
+          else
+            node tools/browser-check/real-pages.mjs --package "$package"
+          fi
+      - name: The shipped build starts (--smoke), from its own install
+        # A report at all means the daemon and the page came up; timing budgets print but don't decide here.
+        env:
+          BRIGADIER_SMOKE_REPORT: ${{ runner.temp }}/smoke.json
+        run: |
+          dist="${CARGO_TARGET_DIR:-target}/electron-dist/${{ matrix.arch }}"
+          case "$RUNNER_OS" in
+            macOS) app="$dist/mac$([ "${{ matrix.arch }}" = arm64 ] && echo -arm64)/Brigadier.app/Contents/MacOS/brigadier-app"; "$app" --smoke || true ;;
+            Windows)
+              LOCALAPPDATA="$(cygpath -u "$LOCALAPPDATA")"
+              installer="$(ls "$dist"/*.exe | head -n 1)"
+              "$installer" //S
+              ls -d "$LOCALAPPDATA"/Programs/*/ | tail -n 5
+              "$LOCALAPPDATA"/Programs/*rigadier/brigadier-app.exe --smoke || true ;;
+            Linux)
+              sudo apt-get install -y "./$(ls "$dist"/*.deb | head -n 1)"
+              ls -l /opt/Brigadier/chrome-sandbox
+              dbus-run-session -- xvfb-run -a brigadier-app --smoke || true ;;
+          esac
+          test -s "$BRIGADIER_SMOKE_REPORT"
+          node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1]));console.log("passed",r.passed);for(const c of r.checks??[])if(c.status==="fail")console.log("FAIL",c.metric,c.measured)' "$BRIGADIER_SMOKE_REPORT"
+      - name: Windows' uninstaller leaves the data
+        if: runner.os == 'Windows'
+        run: |
+          LOCALAPPDATA="$(cygpath -u "$LOCALAPPDATA")"
+          data="$LOCALAPPDATA/Brigadier/Data"
+          ls "$data" | head -n 5
+          echo made-up >"$data/uninstall-check.txt"
+          uninstaller="$(ls "$LOCALAPPDATA"/Programs/*rigadier/Uninstall*.exe | head -n 1)"
+          "$uninstaller" //S
+          sleep 15
+          test ! -e "$uninstaller"
+          test -f "$data/uninstall-check.txt"
+          echo "the install folder is gone and the data stayed"
+      - name: Linux AppImage, with the OS's sandbox rules as they are
+        # Can't be setuid, and Ubuntu 24.04 restricts user namespaces: what it does is reported, not decided here.
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          appimage="$(ls "${CARGO_TARGET_DIR:-target}/electron-dist/${{ matrix.arch }}"/*.AppImage | head -n 1)"
+          chmod +x "$appimage"
+          BRIGADIER_SMOKE_REPORT="$RUNNER_TEMP/appimage-smoke.json" timeout 180 dbus-run-session -- xvfb-run -a "$appimage" --smoke 2>&1 | tail -n 15
+          test -s "$RUNNER_TEMP/appimage-smoke.json"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: real-pages-${{ matrix.name }}
+          path: ${{ runner.temp }}/real-pages
+          if-no-files-found: warn
+      - name: Gather the downloads
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/downloads"
+          find "${CARGO_TARGET_DIR:-target}/electron-dist/${{ matrix.arch }}" -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' \) -exec mv {} "$RUNNER_TEMP/downloads/" \;
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: downloads-${{ matrix.name }}
+          path: ${{ runner.temp }}/downloads
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: warn
+      - name: The real Keychain back, and nothing left running
+        if: always()
+        run: |
+          [ "$RUNNER_OS" = macOS ] && security default-keychain -d user -s login.keychain-db || true
+          sleep 2
+          if pgrep -fl brigadierd; then echo "brigadierd is still running"; exit 1; fi

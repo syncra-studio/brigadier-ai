@@ -62,13 +62,17 @@ setPage(PAGE);
  * page's native actions.
  */
 const asked: unknown[] = [];
+const zooms = new Map<string, number>();
 /** The faked page's matches of "foo": three, the one selected going round. */
 let match = 0;
 mockIPC(async (command, payload) => {
   const args = (payload ?? {}) as Record<string, unknown>;
   switch (command) {
     case "browser_zoom":
+      // A null is the tab reading the zoom its page is at, each time it shows or loads: nothing asked of the page.
+      if (args.zoom === null) return zooms.get(args.id as string) ?? 1;
       asked.push({ zoom: args.zoom, id: args.id });
+      zooms.set(args.id as string, args.zoom as number);
       return args.zoom;
     case "browser_find": {
       asked.push({ find: args.query, step: args.step, id: args.id });

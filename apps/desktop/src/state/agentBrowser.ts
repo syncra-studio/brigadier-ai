@@ -56,18 +56,19 @@ const shell: PageHands = {
   events: browserAgentEvents,
 };
 
+const holdChangeFailed = (error: unknown) => console.error("changing an agent's hold of a tab failed", error);
+
 /**
  * The user took a tab over: the agent's hold of its page goes at once, so what they do is their own. Continue gives it
  * back as it was, except that refs from before the user's turn are void.
  */
 export function startHandingBack(): () => void {
-  const failed = (error: unknown) => console.error("changing an agent's hold of a tab failed", error);
   return useAgentPause.subscribe(({ paused }, before) => {
     for (const tab of Object.keys(paused)) {
-      if (!(tab in before.paused)) browserAgentDrive(tab, false).catch(failed);
+      if (!(tab in before.paused)) browserAgentDrive(tab, false).catch(holdChangeFailed);
     }
     for (const tab of Object.keys(before.paused)) {
-      if (!(tab in paused) && driverOf(tab)) browserAgentDrive(tab, true, true).catch(failed);
+      if (!(tab in paused) && driverOf(tab)) browserAgentDrive(tab, true, true).catch(holdChangeFailed);
     }
   });
 }
@@ -121,12 +122,14 @@ function messageOf(error: unknown): string {
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+const notCancelled = () => {};
+
 /** What `call` comes to on its tab. */
 export async function runCall(call: BrowserCall, hands: PageHands = shell): Promise<BrowserResult> {
   if (!useApp.getState().settings.browserEnabled) return failed("The built-in browser is off.");
   const tab = "tab" in call.op ? call.op.tab : null;
   if (tab !== null && moved.delete(tab)) return failed(PROFILE_CHANGED);
-  let end: (result: BrowserResult) => void = () => {};
+  let end: (result: BrowserResult) => void = notCancelled;
   const cancelled = new Promise<BrowserResult>((resolve) => { end = resolve; });
   if (tab !== null) underWay.set(tab, (underWay.get(tab) ?? new Set()).add(end));
   try {

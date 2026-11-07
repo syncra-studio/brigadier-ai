@@ -33,7 +33,7 @@ export function openAsTab(from: WebContents, url: string): void {
 
 /** Everything a page gets, in a tab's guest or in a popup. */
 export function installGuest(contents: WebContents): void {
-  installGuestMenu(contents);
+  installGuestMenu(contents, openAsTab);
   installFailedLoad(contents);
   installGuestLinks(contents);
   contents.setWindowOpenHandler((details) => {
