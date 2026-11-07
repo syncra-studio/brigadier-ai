@@ -1248,6 +1248,7 @@ mod tests {
             secure: true,
             http_only: true,
             same_site: None,
+            source_insecure: false,
         }
     }
 

@@ -3,6 +3,8 @@
 // postMessage, and anything else (target=_blank, window.open with no features) is a tab of the opener, with none.
 import { BrowserWindow, screen, type HandlerDetails, type WebContents } from "electron";
 
+import { watchSiteActivity } from "./browserClearData";
+import { watchVisits } from "./browserHistory";
 import { note } from "./events";
 import { installFailedLoad } from "./guestFailedLoad";
 import { installGuestLinks, takeOsLink } from "./guestLinks";
@@ -34,6 +36,8 @@ export function openAsTab(from: WebContents, url: string): void {
 /** Everything a page gets, in a tab's guest or in a popup. */
 export function installGuest(contents: WebContents): void {
   installGuestMenu(contents, openAsTab);
+  watchVisits(contents);
+  watchSiteActivity(contents);
   installFailedLoad(contents);
   installGuestLinks(contents);
   const tab = tabGuest.get(contents) ?? contents;

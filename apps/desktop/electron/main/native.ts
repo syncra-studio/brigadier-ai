@@ -26,6 +26,9 @@ type Addon = {
   shiftHeld(): boolean;
   noticePermission(): Promise<string>;
   noticeAsk(): void;
+  importSources(home: string): Promise<string>;
+  importRead(home: string, key: string, id: string, what: string): Promise<string>;
+  importSiteStorage(from: string, to: string): Promise<number>;
   locationStatus(): "off" | "undetermined" | "denied" | "restricted" | "allowed" | "unknown";
   locationAsk(): void;
 };

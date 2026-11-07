@@ -3,10 +3,10 @@ import { test } from "node:test";
 
 import type { ImportRecord, ImportSource } from "@/ipc/generated";
 import {
-  doneToast,
-  doneTone,
   domainsText,
   importedBadge,
+  importedName,
+  recordDetails,
   opensDialog,
   progressText,
   reasonText,
@@ -52,8 +52,8 @@ test("each state gives its row a status, a tone and one button", () => {
   assert.deepEqual(view({ state: "needsKeychainAccess" }), ["Needs Keychain access", "attention", "import", "Import…"]);
   assert.deepEqual(view({ state: "noKeychainKey", profiles: [] }), ["No encryption key in Keychain", "idle", "recheck", "Recheck"]);
   assert.deepEqual(view({ state: "unavailable", profiles: [] }), ["Unavailable", "idle", "none", null]);
-  assert.deepEqual(view({ profiles: [] }), ["No cookies yet", "idle", "none", "Import…"]);
-  assert.deepEqual(rowView(source({ profiles: [{ id: "f/a", name: "a", cookies: 0, isDefault: true }] })).details, ["1 profile"]);
+  assert.deepEqual(view({ profiles: [] }), ["Nothing to bring", "idle", "none", "Import…"]);
+  assert.deepEqual(rowView(source({ profiles: [{ id: "f/a", name: "a", cookies: 0, isDefault: true }] })).details, ["1 profile", "0 cookies"]);
 });
 
 test("a ready row counts profiles and cookies, or says what the last import brought", () => {
@@ -87,17 +87,6 @@ test("the badge says how long ago", () => {
   assert.equal(importedBadge(record({ atMs: now - 3 * 86_400_000 }), now), "Imported 3d ago");
 });
 
-test("the toast after an import says what came over", () => {
-  assert.equal(doneToast("Dia", record()), `Imported ${n(2790)} cookies from Dia`);
-  assert.equal(doneToast("Dia", record({ imported: 1, history: 120 })), "Imported 1 cookie and 120 pages of history from Dia");
-  assert.equal(doneToast("Firefox", record({ imported: 0, history: 3 })), "Imported 3 pages of history from Firefox");
-  assert.equal(doneToast("Arc", record({ imported: 0 })), "No cookies were imported from Arc");
-  assert.deepEqual(
-    [record(), record({ imported: 0, history: 3 }), record({ imported: 0 })].map(doneTone),
-    ["success", "success", "neutral"],
-  );
-});
-
 test("failures a person can put right open a dialog; the rest end in a toast", () => {
   assert.deepEqual(
     (["running", "needsFullDiskAccess", "needsKeychainAccess", "noKeychainKey", "gone", "readFailed"] as const).filter(opensDialog),
@@ -116,4 +105,22 @@ test("progress reads, then counts the cookies added, then history", () => {
   assert.equal(progressText(null), "Reading and decrypting cookies. macOS may ask for Keychain access.");
   assert.equal(progressText({ type: "cookies", done: 1200, total: 2841 }), `Adding cookies… ${n(1200)} of ${n(2841)}`);
   assert.equal(progressText({ type: "history" }), "Adding history…");
+});
+
+test("a new profile's name says which browser it came from when its own wouldn't", () => {
+  assert.equal(importedName("Dia", "Work", ["Personal"]), "Work");
+  assert.equal(importedName("Dia", "Work", ["Work"]), "Dia: Work");
+  assert.equal(importedName("Firefox", "default-release", []), "Firefox: default-release");
+  assert.equal(importedName("Chrome", "Person 2", []), "Chrome: Person 2");
+});
+
+test("a profile with no cookies still imports what else it has", () => {
+  const view = rowView(source({ profiles: [{ id: "f/a", name: "a", cookies: 0, isDefault: true }] }));
+  assert.equal(view.action, "import");
+  assert.equal(view.status, "Ready");
+  assert.deepEqual(rowView(source({ profiles: [] })).status, "Nothing to bring");
+});
+
+test("the row names every profile the last imports brought", () => {
+  assert.deepEqual(recordDetails(record({ profiles: ["Personal", "Work"], skipped: 0 })), [`Personal, Work · ${n(2790)} cookies imported`]);
 });

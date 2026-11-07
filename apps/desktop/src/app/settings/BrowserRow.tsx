@@ -1,7 +1,7 @@
 import { BrowserIcon } from "@/app/settings/BrowserIcon";
 import { BrowserStatus } from "@/app/settings/BrowserStatus";
 import { Badge, Button } from "@/components/controls";
-import type { ImportSource } from "@/ipc/generated";
+import type { ListedSource } from "@/state/browserImport";
 import { importedBadge, rowView } from "@/state/browserImport";
 
 /** One browser in Import Browser Data: its icon, name and badge, where it stands, its button. */
@@ -9,11 +9,17 @@ export function BrowserRow({
   source,
   nowMs,
   disabled,
+  alreadyIn,
+  skipped,
   onAction,
 }: {
-  source: ImportSource;
+  source: ListedSource;
   nowMs: number;
   disabled: boolean;
+  /** The line naming its profiles already in Brigadier. */
+  alreadyIn?: string | undefined;
+  /** The line naming its profiles with nothing to bring. */
+  skipped?: string | undefined;
   onAction: () => void;
 }) {
   const view = rowView(source);
@@ -36,6 +42,8 @@ export function BrowserRow({
               {detail}
             </span>
           ))}
+          {alreadyIn && <span data-slot="import-detail" className="min-w-0">{alreadyIn}</span>}
+          {skipped && <span data-slot="import-skipped" className="min-w-0">{skipped}</span>}
         </div>
       </div>
       {view.label && (

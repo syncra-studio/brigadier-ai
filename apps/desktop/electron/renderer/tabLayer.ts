@@ -23,6 +23,7 @@ declare global {
   interface Window {
     brigadierShell: {
       profiles(op: string, args?: unknown): Promise<unknown>;
+      browserData(op: string, args: unknown): Promise<any>;
       permissionAnswer(request: number, answer: string): Promise<void>;
       permissionOpenSettings(device: string): Promise<void>;
       flushStorage(): void;
@@ -309,7 +310,7 @@ function listen(page: Page): void {
 /** Opens in flight: React's strict effects ask twice, and there must be one page per tab. */
 const opening = new Map<string, Promise<void>>();
 
-export function openPage(id: string, url: string, bounds: BrowserBounds, emit: (event: BrowserEvent) => void): Promise<void> {
+export function openPage(id: string, url: string, bounds: BrowserBounds, emit: (event: BrowserEvent) => void, agent = false, restored = false): Promise<void> {
   const inFlight = opening.get(id);
   if (inFlight) return inFlight;
   const existing = pages.get(id);
@@ -318,12 +319,12 @@ export function openPage(id: string, url: string, bounds: BrowserBounds, emit: (
     load(existing, url);
     return Promise.resolve();
   }
-  const open = makePage(id, url, bounds, emit).finally(() => opening.delete(id));
+  const open = makePage(id, url, bounds, emit, agent, restored).finally(() => opening.delete(id));
   opening.set(id, open);
   return open;
 }
 
-async function makePage(id: string, url: string, bounds: BrowserBounds, emit: (event: BrowserEvent) => void): Promise<void> {
+async function makePage(id: string, url: string, bounds: BrowserBounds, emit: (event: BrowserEvent) => void, agent: boolean, restored: boolean): Promise<void> {
   // By import, not at the top: this module runs before the app's state may.
   const { pinTabToItsProfile, profilesLoaded } = await import("@/state/browserProfilePlaces");
   await profilesLoaded();
@@ -335,6 +336,7 @@ async function makePage(id: string, url: string, bounds: BrowserBounds, emit: (e
   const page: Page = { id, element, profileId, emit, ready: false, finding: null, shown: false, placed: false, url, loading: true };
   pages.set(id, page);
   listen(page);
+  element.addEventListener("did-attach", () => void window.brigadierShell.browserData("guest", { webContents: element.getWebContentsId(), agent, restored }), { once: true });
   place(page, bounds);
   page.placed = false;
   element.style.visibility = "hidden";

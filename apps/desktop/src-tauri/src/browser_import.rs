@@ -597,6 +597,7 @@ mod tests {
             secure: true,
             http_only: false,
             same_site: None,
+            source_insecure: false,
         }
     }
 
@@ -612,6 +613,7 @@ mod tests {
             unreadable: 1,
             unreadable_domains: vec![".x.com".into()],
             partitioned_domains: vec!["p.com".into()],
+            partitioned_cookies: Vec::new(),
         };
         let personal = Cookies {
             cookies: vec![

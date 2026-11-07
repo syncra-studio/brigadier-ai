@@ -252,6 +252,9 @@
      file tab's room in a dialog. */
   --container-plugin-file: min(96rem, calc(100vw - 4rem));
   --spacing-plugin-file-height: min(64rem, calc(100dvh - 6rem));
+  /* The import dialog's pick and results steps, wider than a plain dialog, and how tall its results get. */
+  --container-import-dialog: 37.5rem;
+  --spacing-import-results: 26rem;
   --spacing-user-message: 20lh;
   --spacing-peer-message: 6lh;
   --container-setup: min(68rem, calc(100vw - 2rem));

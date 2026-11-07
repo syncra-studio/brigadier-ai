@@ -1,15 +1,16 @@
 //! Gecko-family browsers: Firefox and its forks (Zen, LibreWolf, Waterfox, Floorp).
 //!
 //! Profiles are listed in `profiles.ini` at the browser's root. Cookies live in
-//! `cookies.sqlite` (`moz_cookies`, unencrypted) and history in `places.sqlite`.
+//! `cookies.sqlite` (`moz_cookies`, unencrypted); history and bookmarks in `places.sqlite`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::layout::join_rel;
 use crate::sqlite::{columns, open_copy};
 use crate::{
-    Cookie, Cookies, Error, Family, Profile, SameSite, Visit, app_path, existing_app, is_web_url,
-    key_for, probe,
+    Bookmark, BookmarkRoot, Bookmarks, Cookie, Cookies, Error, Family, Layout, Profile, SameSite,
+    Visit, app_path, existing_app, is_web_url, key_for, probe,
 };
 
 /// A Gecko browser whose folder and app are known.
@@ -58,6 +59,122 @@ const KNOWN: &[Known] = &[
         browser: "Floorp",
         key: "floorp",
         bundles: &["Floorp.app"],
+    },
+];
+
+/// A Gecko browser's roots and executables on Windows, under `%APPDATA%`.
+struct WindowsKnown {
+    folder: &'static str,
+    browser: &'static str,
+    key: &'static str,
+    /// Under the Program Files or per-user folders in [`Layout::Windows`].
+    apps: &'static [&'static str],
+}
+
+const WINDOWS_KNOWN: &[WindowsKnown] = &[
+    WindowsKnown {
+        folder: "Mozilla/Firefox",
+        browser: "Firefox",
+        key: "firefox",
+        // Developer Edition and Nightly share Firefox's profiles.ini.
+        apps: &[
+            "Mozilla Firefox/firefox.exe",
+            "Firefox Developer Edition/firefox.exe",
+            "Firefox Nightly/firefox.exe",
+        ],
+    },
+    WindowsKnown {
+        folder: "zen",
+        browser: "Zen",
+        key: "zen",
+        apps: &["Zen Browser/zen.exe"],
+    },
+    WindowsKnown {
+        folder: "librewolf",
+        browser: "LibreWolf",
+        key: "librewolf",
+        apps: &["LibreWolf/librewolf.exe"],
+    },
+    WindowsKnown {
+        folder: "Waterfox",
+        browser: "Waterfox",
+        key: "waterfox",
+        apps: &["Waterfox/waterfox.exe"],
+    },
+    WindowsKnown {
+        folder: "Floorp",
+        browser: "Floorp",
+        key: "floorp",
+        apps: &["Ablaze Floorp/floorp.exe", "Floorp/floorp.exe"],
+    },
+];
+
+/// A Gecko browser's roots and launchers on Linux.
+struct LinuxKnown {
+    browser: &'static str,
+    key: &'static str,
+    /// Launchers on `$PATH`.
+    bins: &'static [&'static str],
+    /// Roots under the home, then under `$XDG_CONFIG_HOME`, in the order the browser prefers:
+    /// Firefox keeps using `~/.mozilla` when it is there, and new installs use the XDG folder.
+    homes: &'static [&'static str],
+    configs: &'static [&'static str],
+    /// The snap's name and its root under `~/snap/<name>`.
+    snap: Option<(&'static str, &'static str)>,
+    /// The Flatpak app id and its roots under `~/.var/app/<id>`.
+    flatpak: Option<(&'static str, &'static [&'static str])>,
+}
+
+// Firefox's classic and Snap folders agree with bb's `sources.ts`. The XDG and Flatpak folders and
+// the forks are the projects' usual defaults, recalled rather than checked against a real machine.
+const LINUX_KNOWN: &[LinuxKnown] = &[
+    LinuxKnown {
+        browser: "Firefox",
+        key: "firefox",
+        bins: &["firefox", "firefox-esr", "firefox-developer-edition"],
+        homes: &[".mozilla/firefox"],
+        configs: &["mozilla/firefox"],
+        snap: Some(("firefox", "common/.mozilla/firefox")),
+        flatpak: Some((
+            "org.mozilla.firefox",
+            &[".mozilla/firefox", "config/mozilla/firefox"],
+        )),
+    },
+    LinuxKnown {
+        browser: "Zen",
+        key: "zen",
+        bins: &["zen", "zen-browser"],
+        homes: &[".zen"],
+        configs: &[],
+        snap: None,
+        flatpak: Some(("app.zen_browser.zen", &[".zen"])),
+    },
+    LinuxKnown {
+        browser: "LibreWolf",
+        key: "librewolf",
+        bins: &["librewolf"],
+        homes: &[".librewolf"],
+        configs: &["librewolf/librewolf"],
+        snap: None,
+        flatpak: Some(("io.gitlab.librewolf-community", &[".librewolf"])),
+    },
+    LinuxKnown {
+        browser: "Waterfox",
+        key: "waterfox",
+        bins: &["waterfox"],
+        homes: &[".waterfox"],
+        configs: &[],
+        snap: None,
+        flatpak: Some(("net.waterfox.waterfox", &[".waterfox"])),
+    },
+    LinuxKnown {
+        browser: "Floorp",
+        key: "floorp",
+        bins: &["floorp"],
+        homes: &[".floorp"],
+        configs: &[],
+        snap: None,
+        flatpak: Some(("one.ablaze.floorp", &[".floorp"])),
     },
 ];
 
@@ -110,6 +227,84 @@ pub(crate) fn discover(home: &Path, app_dirs: &[&Path]) -> Vec<Profile> {
                 app,
             ));
         }
+    }
+    profiles
+}
+
+/// The profiles of the known browsers on Windows or Linux. Each browser's install uses the first
+/// of its roots that has a profiles.ini. Unknown forks are left out, as on these OSes nothing says
+/// whether an app is a browser.
+pub(crate) fn discover_other(layout: &Layout) -> Vec<Profile> {
+    let first_root = |roots: Vec<PathBuf>| {
+        roots
+            .into_iter()
+            .find(|root| root.join("profiles.ini").is_file())
+    };
+    let mut profiles = Vec::new();
+    match layout {
+        Layout::Windows {
+            roaming_app_data,
+            app_dirs,
+            ..
+        } => {
+            let app_dirs: Vec<&Path> = app_dirs.iter().map(PathBuf::as_path).collect();
+            for known in WINDOWS_KNOWN {
+                if let Some(root) = first_root(vec![join_rel(roaming_app_data, known.folder)]) {
+                    let app = app_path(&app_dirs, known.apps);
+                    profiles.extend(root_profiles(&root, known.browser, known.key, app));
+                }
+            }
+        }
+        Layout::Linux {
+            home,
+            config_home,
+            path_dirs,
+            snap_bin,
+            flatpak_bin,
+            ..
+        } => {
+            let app = |dirs: &[PathBuf], names: &[&str]| {
+                let dirs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+                app_path(&dirs, names)
+            };
+            for known in LINUX_KNOWN {
+                let native = known
+                    .homes
+                    .iter()
+                    .map(|root| join_rel(home, root))
+                    .chain(known.configs.iter().map(|root| join_rel(config_home, root)))
+                    .collect();
+                if let Some(root) = first_root(native) {
+                    let app = app(path_dirs, known.bins);
+                    profiles.extend(root_profiles(&root, known.browser, known.key, app));
+                }
+                if let Some((snap, data)) = known.snap
+                    && let Some(root) =
+                        first_root(vec![join_rel(&home.join("snap").join(snap), data)])
+                {
+                    profiles.extend(root_profiles(
+                        &root,
+                        &format!("{} (Snap)", known.browser),
+                        &format!("{}-snap", known.key),
+                        app(snap_bin, &[snap]),
+                    ));
+                }
+                if let Some((id, roots)) = known.flatpak {
+                    let base = home.join(".var/app").join(id);
+                    if let Some(root) =
+                        first_root(roots.iter().map(|root| join_rel(&base, root)).collect())
+                    {
+                        profiles.extend(root_profiles(
+                            &root,
+                            &format!("{} (Flatpak)", known.browser),
+                            &format!("{}-flatpak", known.key),
+                            app(flatpak_bin, &[id]),
+                        ));
+                    }
+                }
+            }
+        }
+        Layout::Macos { .. } => {}
     }
     profiles
 }
@@ -181,8 +376,11 @@ fn root_profiles(root: &Path, browser: &str, key: &str, app: Option<PathBuf>) ->
                 app_path: app,
                 keychain_service: None,
                 keychain_account: None,
+                local_state: None,
+                linux_secret_application: None,
                 has_cookies: true,
                 has_history: true,
+                has_bookmarks: true,
                 readable: false,
                 is_default: true,
                 dir: root.to_owned(),
@@ -223,8 +421,12 @@ fn root_profiles(root: &Path, browser: &str, key: &str, app: Option<PathBuf>) ->
             app_path: app.clone(),
             keychain_service: None,
             keychain_account: None,
+            local_state: None,
+            linux_secret_application: None,
             has_cookies,
             has_history,
+            // places.sqlite holds both.
+            has_bookmarks: has_history,
             readable: (!has_cookies || cookies_readable) && (!has_history || history_readable),
             is_default,
             dir,
@@ -314,6 +516,7 @@ pub(crate) fn read_cookies(dir: &Path, now_unix: i64) -> Result<Cookies, Error> 
             secure: row.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0,
             http_only: row.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
             same_site,
+            source_insecure: false,
         });
     }
     Ok(out)
@@ -363,6 +566,98 @@ pub(crate) fn read_history(dir: &Path, limit: usize) -> Result<Vec<Visit>, Error
         }
     }
     Ok(visits)
+}
+
+/// A `moz_bookmarks` row.
+struct BookmarkRow {
+    id: i64,
+    kind: i64,
+    title: String,
+    url: Option<String>,
+    added_micros: Option<i64>,
+}
+
+/// The `moz_bookmarks` type of a bookmark, and of a folder. Separators are the third.
+const TYPE_BOOKMARK: i64 = 1;
+const TYPE_FOLDER: i64 = 2;
+/// The guids of the folders holding what the user sees. The tags folder is left out on purpose:
+/// its rows are labels on bookmarks that are listed elsewhere.
+const BOOKMARK_ROOTS: [(&str, BookmarkRoot); 4] = [
+    ("toolbar_____", BookmarkRoot::Bar),
+    ("menu________", BookmarkRoot::Menu),
+    ("unfiled_____", BookmarkRoot::Other),
+    ("mobile______", BookmarkRoot::Mobile),
+];
+
+pub(crate) fn read_bookmarks(dir: &Path) -> Result<Bookmarks, Error> {
+    let conn = open_copy(&dir.join("places.sqlite"))?;
+    let mut children: HashMap<i64, Vec<BookmarkRow>> = HashMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT b.id, b.parent, b.type, COALESCE(NULLIF(b.title, ''), p.title, ''), p.url,
+                b.dateAdded
+         FROM moz_bookmarks b LEFT JOIN moz_places p ON p.id = b.fk
+         ORDER BY b.parent, b.position, b.id",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        children.entry(row.get(1)?).or_default().push(BookmarkRow {
+            id: row.get(0)?,
+            kind: row.get(2)?,
+            title: row.get(3)?,
+            url: row.get(4)?,
+            added_micros: row.get(5)?,
+        });
+    }
+    let mut out = Bookmarks::default();
+    for (guid, root) in BOOKMARK_ROOTS {
+        let id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM moz_bookmarks WHERE guid = ?1",
+                [guid],
+                |row| row.get(0),
+            )
+            .ok();
+        if let Some(id) = id {
+            let mut seen = HashSet::from([id]);
+            walk_bookmarks(id, &children, root, &mut Vec::new(), &mut seen, &mut out);
+        }
+    }
+    Ok(out)
+}
+
+/// Collects the bookmarks under a folder. `seen` stops a damaged database from looping.
+fn walk_bookmarks(
+    parent: i64,
+    children: &HashMap<i64, Vec<BookmarkRow>>,
+    root: BookmarkRoot,
+    folders: &mut Vec<String>,
+    seen: &mut HashSet<i64>,
+    out: &mut Bookmarks,
+) {
+    for row in children.get(&parent).into_iter().flatten() {
+        match row.kind {
+            TYPE_FOLDER if seen.insert(row.id) => {
+                folders.push(row.title.clone());
+                walk_bookmarks(row.id, children, root, folders, seen, out);
+                folders.pop();
+            }
+            TYPE_BOOKMARK => match row.url.as_deref().filter(|url| is_web_url(url)) {
+                Some(url) => out.bookmarks.push(Bookmark {
+                    url: url.to_owned(),
+                    title: row.title.clone(),
+                    root,
+                    folders: folders.clone(),
+                    // PRTime: microseconds since the Unix epoch.
+                    added_at_ms: row
+                        .added_micros
+                        .filter(|micros| *micros > 0)
+                        .map(|micros| micros.div_euclid(1000)),
+                }),
+                None => out.skipped += 1,
+            },
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]

@@ -313,3 +313,47 @@ pub async fn open_simulator(device: Option<String>) -> Result<()> {
             failed(serde_json::to_string(&error).unwrap_or_else(|_| error.message.clone()))
         })
 }
+
+/// The browsers an import can copy from, as JSON (`browser_import::list`). `home` is where to look.
+#[napi]
+pub async fn import_sources(home: String) -> Result<String> {
+    tokio::task::spawn_blocking(move || {
+        serde_json::to_string(&crate::browser_import::list(std::path::Path::new(&home)))
+    })
+    .await
+    .map_err(failed)?
+    .map_err(failed)
+}
+
+/// Reads one profile of another browser, as JSON (`browser_import::read`). The reply can hold
+/// passwords: it goes to main, and on to the profile's vault, and never to a page.
+#[napi]
+pub async fn import_read(home: String, key: String, id: String, what: String) -> Result<String> {
+    tokio::task::spawn_blocking(move || {
+        let what = serde_json::from_str(&what)?;
+        serde_json::to_string(&crate::browser_import::read(
+            std::path::Path::new(&home),
+            &key,
+            &id,
+            &what,
+        ))
+    })
+    .await
+    .map_err(failed)?
+    .map_err(failed)
+}
+
+/// Copies a Chromium profile's site storage into a folder no session has open; the files copied.
+#[napi]
+pub async fn import_site_storage(from: String, to: String) -> Result<u32> {
+    tokio::task::spawn_blocking(move || {
+        brigadier_browser_data::copy_site_storage(
+            std::path::Path::new(&from),
+            std::path::Path::new(&to),
+        )
+    })
+    .await
+    .map_err(failed)?
+    .map(|copied| u32::try_from(copied).unwrap_or(u32::MAX))
+    .map_err(failed)
+}

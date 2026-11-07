@@ -634,7 +634,11 @@ name = "brigadier-browser-data"
 version = "0.1.0"
 dependencies = [
  "aes 0.9.3",
+ "aes-gcm",
+ "base64 0.23.1",
  "cbc 0.2.1",
+ "des",
+ "hmac 0.13.0",
  "pbkdf2 0.13.0",
  "plist",
  "rusqlite",
@@ -647,6 +651,8 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "windows-sys 0.61.2",
+ "zbus",
 ]
 
 [[package]]
@@ -941,6 +947,7 @@ dependencies = [
 name = "brigadier-shell-native"
 version = "0.1.0"
 dependencies = [
+ "brigadier-browser-data",
  "brigadier-core",
  "brigadier-ipc",
  "brigadier-sandbox",
@@ -1834,6 +1841,15 @@ dependencies = [
  "quote",
  "rustc_version",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "des"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "916a94e407b54f9034d71dd748234cd1e516ced6284009906ae246f177eafe5a"
+dependencies = [
+ "cipher 0.5.2",
 ]
 
 [[package]]

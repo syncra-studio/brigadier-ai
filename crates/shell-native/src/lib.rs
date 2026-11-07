@@ -3,6 +3,7 @@
 //! builds it as the Node addon the Electron main process loads (`native`).
 
 pub mod bridge;
+pub mod browser_import;
 pub mod browser_grants;
 pub mod browser_store;
 pub mod launcher;

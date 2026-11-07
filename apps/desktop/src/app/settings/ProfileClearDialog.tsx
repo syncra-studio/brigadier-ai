@@ -1,8 +1,7 @@
-import { ConfirmDialog } from "@/components/overlays";
-import { type BrowserProfile, clearProfile } from "@/state/browserProfiles";
-import { toast } from "@/state/toasts";
+import { ClearBrowsingDataDialog } from "@/app/settings/ClearBrowsingDataDialog";
+import type { BrowserProfile } from "@/state/browserProfiles";
 
-/** Clears one profile's data; other profiles aren't touched. The last profile's only way to empty. */
+/** Clear browsing data, starting on one profile; other profiles aren't touched. */
 export function ProfileClearDialog({
   profile,
   open,
@@ -14,21 +13,5 @@ export function ProfileClearDialog({
   onOpenChange: (open: boolean) => void;
   onCleared?: () => void;
 }) {
-  return (
-    <ConfirmDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title={`Clear ${profile.name}'s data?`}
-      description="Its history, sign-ins, site data, cache and download history are removed, and its open tabs reload signed out. Other profiles aren't touched."
-      confirm="Clear data"
-      destructive
-      onConfirm={() => {
-        onOpenChange(false);
-        clearProfile(profile.id).then(
-          () => onCleared?.(),
-          (cause: unknown) => toast(`Couldn't clear ${profile.name}: ${cause instanceof Error ? cause.message : String(cause)}`, { tone: "error" }),
-        );
-      }}
-    />
-  );
+  return <ClearBrowsingDataDialog profile={profile.id} open={open} onOpenChange={onOpenChange} siteData onCleared={onCleared} />;
 }

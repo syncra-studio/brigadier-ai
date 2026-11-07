@@ -1,7 +1,7 @@
 /**
  * Settings › Import Browser Data over a faked shell: one row per browser state, the profile
- * picker, importing, Full Disk Access, a blocked import, the toasts after one, the last import's
- * record, the browser off, and no browsers or an error.
+ * picker, importing, Full Disk Access, a blocked import, the results per profile with a failure
+ * and its Try again, the last import's record, the browser off, and no browsers or an error.
  */
 import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
@@ -9,16 +9,19 @@ import { createRoot } from "react-dom/client";
 
 import { BrowserImportPage } from "@/app/settings/BrowserImportPage";
 import { Toaster, TooltipProvider } from "@/components/overlays";
-import type { ImportOutcome, ImportProgress, ImportRecord, ImportSource } from "@/ipc/generated";
+import type { ImportProgress, ImportRecord, Request, Settings } from "@/ipc/generated";
+import type { ImportedOutcome, ImportedRecord, ListedSource } from "@/state/browserImport";
+import { allProfiles } from "@/state/browserProfiles";
 import { useApp } from "@/state/store";
 
 /*
  * ?drive=1 reads every row, picks profiles for Dia and imports them (trying to leave the
- * importing dialog halfway), grants Safari Full Disk Access (still off the first time), meets
- * Edge's Keychain refusal, quits Helium when asked, fails to read Arc, rechecks Chrome, then
+ * importing dialog halfway), reads the results and tries a failed part again, grants Safari Full
+ * Disk Access (still off the first time), meets Edge's Keychain refusal, quits Helium when asked,
+ * fails to read Arc, rechecks Chrome, then
  * lists no browsers, an error and the browser off, and writes what it saw to
  * #browser-import-result (BrowserImportPageRender.test.ts reads it).
- * ?view=choose|importing|fda|fda-still-off|blocked-keychain|blocked-running|toast|off|empty|error|loading
+ * ?view=choose|importing|results|fda|fda-still-off|blocked-keychain|blocked-running|off|empty|error|loading
  * opens that state and stays, for screenshots.
  */
 const params = new URLSearchParams(location.search);
@@ -54,7 +57,7 @@ const ARC_RECORD: ImportRecord = {
   history: 0,
 };
 
-const source = (key: string, name: string, fields: Partial<ImportSource> = {}): ImportSource => ({
+const source = (key: string, name: string, fields: Partial<ListedSource> = {}): ListedSource => ({
   key,
   name,
   family: "chromium",
@@ -62,19 +65,26 @@ const source = (key: string, name: string, fields: Partial<ImportSource> = {}): 
   state: "ready",
   profiles: [],
   record: null,
+  emptyProfiles: [],
+  signIns: true,
+  passwords: true,
+  imports: {},
+  firstImport: true,
   ...fields,
 });
 const one = (key: string, cookies: number) => [{ id: `${key}/Default`, name: "Default", cookies, isDefault: true }];
 
-let sources: ImportSource[] = [
+let sources: ListedSource[] = [
   source("chrome", "Google Chrome", { state: "running", icon: icon(215) }),
-  source("helium", "Helium", { profiles: one("helium", 40), icon: icon(255) }),
+  source("chromium", "Chromium", { profiles: one("chromium", 12), signIns: false, passwords: false }),
+  source("helium", "Helium", { profiles: one("helium", 40), icon: icon(255), passwords: false }),
   source("edge", "Microsoft Edge", { state: "needsKeychainAccess", profiles: one("edge", 310) }),
   source("brave", "Brave", { state: "noKeychainKey", icon: icon(15) }),
   source("vivaldi", "Vivaldi", { state: "unavailable" }),
   source("arc", "Arc", { profiles: one("arc", 912), record: ARC_RECORD }),
   source("dia", "Dia", {
     icon: icon(42),
+    emptyProfiles: ["Guest"],
     profiles: [
       { id: "dia/Default", name: "Personal", cookies: 2841, isDefault: true },
       { id: "dia/Profile 1", name: "Work", cookies: 1204, isDefault: false },
@@ -88,11 +98,11 @@ let sources: ImportSource[] = [
 let mode: "sources" | "empty" | "error" = view === "empty" ? "empty" : view === "error" ? "error" : "sources";
 /** Ends a running Dia import; set while one waits. */
 let release: (() => void) | null = null;
-const patch = (key: string, fields: Partial<ImportSource>) => {
+const patch = (key: string, fields: Partial<ListedSource>) => {
   sources = sources.map((item) => (item.key === key ? { ...item, ...fields } : item));
 };
 
-const failed = (reason: Extract<ImportOutcome, { type: "failed" }>["reason"], message: string): ImportOutcome => ({
+const failed = (reason: Extract<ImportedOutcome, { type: "failed" }>["reason"], message: string): ImportedOutcome => ({
   type: "failed",
   reason,
   message,
@@ -109,48 +119,77 @@ mockIPC(async (command, payload) => {
       if (view === "loading") return new Promise(() => {});
       if (mode === "error") throw new Error("Could not check the installed browsers.");
       return mode === "empty" ? [] : sources;
+    case "ipc_request": {
+      const req = (args as { request: Request }).request;
+      return req.method === "updateSettings" ? { method: req.method, settings: req.settings as Settings } : { method: req.method };
+    }
     case "browser_import_open_access":
       asked.push("openAccess");
       return null;
-    case "browser_import": {
+    case "browser_import_read": {
       const key = args.key as string;
-      const ids = args.ids as string[];
-      asked.push({ import: { key, ids, history: args.history } });
+      if (key === "edge") {
+        patch("edge", { state: "needsKeychainAccess" });
+        return failed("needsKeychainAccess", "macOS didn't let Brigadier use Microsoft Edge's cookie key.");
+      }
+      if (key === "arc") return failed("readFailed", "Arc's cookies couldn't be read (database disk image is malformed).");
+      if (key === "helium" && sources.find((item) => item.key === "helium")?.state === "ready" && !asked.includes("heliumQuit")) {
+        asked.push("heliumQuit");
+        patch("helium", { state: "running" });
+        return failed("running", "Quit Helium first, then import again.");
+      }
+      return { type: "ready", token: `${key}|${args.id as string}` };
+    }
+    case "browser_import_write": {
+      const [key = "", id = ""] = (args.token as string).split("|");
+      const ids = [id];
+      const options = args.what as { signIns: boolean; history: boolean; bookmarks: boolean; passwords: boolean };
+      const { signIns, history, bookmarks, passwords } = options;
+      asked.push({ import: { key, ids, history, signIns, bookmarks, passwords, replace: args.replace } });
       const progress = args.progress as { onmessage: (message: ImportProgress) => void };
-      const done = (record: Partial<ImportRecord>, historyError: string | null = null): ImportOutcome => {
-        const full: ImportRecord = { ...ARC_RECORD, atMs: Date.now(), skipped: 0, skippedDomains: [], skippedDomainCount: 0, ...record };
-        patch(key, { record: full });
-        return { type: "done", record: full, historyError };
+      const done = (record: Partial<ImportedRecord>, more: Partial<Extract<ImportedOutcome, { type: "done" }>> = {}): ImportedOutcome => {
+        const full: ImportedRecord = { ...ARC_RECORD, atMs: Date.now(), skipped: 0, skippedDomains: [], skippedDomainCount: 0, history: 0, ...record };
+        // A retried part leaves the browser's record as the import left it.
+        // The row sums up each source profile's last import, as main does.
+        if (options.signIns) {
+          const before = sources.find((each) => each.key === key)?.record;
+          patch(key, { record: before ? { ...full, profiles: [...before.profiles, ...full.profiles], imported: before.imported + full.imported, skipped: before.skipped + full.skipped, skippedDomains: [...before.skippedDomains, ...full.skippedDomains], skippedDomainCount: before.skippedDomainCount + full.skippedDomainCount } : full });
+        }
+        return { type: "done", record: full, historyError: null, ...more };
       };
       switch (key) {
         case "dia": {
-          progress.onmessage({ type: "reading" });
-          progress.onmessage({ type: "cookies", done: 1200, total: 4045 });
-          await new Promise<void>((resolve) => {
-            release = resolve;
-          });
-          return done({
-            profiles: ["Personal", "Work"],
-            imported: 3994,
-            skipped: 51,
-            skippedDomains: ["accounts.google.com", "mail.google.com"],
-            skippedDomainCount: 2,
-          });
+          if (ids[0] === "dia/Default") {
+            progress.onmessage({ type: "reading" });
+            progress.onmessage({ type: "cookies", done: 1200, total: 4045 });
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            return done({
+              profiles: ["Personal"],
+              imported: 2800,
+              skipped: 51,
+              skippedDomains: ["accounts.google.com", "mail.google.com"],
+              skippedDomainCount: 2,
+              appBoundDomains: ["accounts.google.com"],
+              history: 900,
+              bookmarks: 40,
+              passwords: 21,
+              googleLeftOut: 2,
+            });
+          }
+          // Work's bookmarks can't be read once, and come on Try again.
+          if (options.signIns) {
+            return done({ profiles: ["Work"], imported: 1194, history: 300, bookmarks: 0, passwords: 0, passwordsKept: true }, { bookmarksError: "Dia's bookmarks couldn't be read" });
+          }
+          return done({ profiles: ["Work"], imported: 0, bookmarks: 12 });
         }
         case "safari":
-          return done({ profiles: ["Default"], imported: 12, history: 340 });
-        case "edge":
-          patch("edge", { state: "needsKeychainAccess" });
-          return failed("needsKeychainAccess", "macOS didn't let Brigadier use Microsoft Edge's cookie key.");
+          return done({ profiles: ["Default"], imported: 12, history: 340, bookmarks: 5 }, { passwordsError: "Safari keeps its passwords in iCloud Keychain, which other apps can't read." });
+        case "firefox":
+          return done({ profiles: ["Default"], imported: 5, history: 8, bookmarks: 2 }, { passwordsError: "Firefox's passwords are locked with a Primary Password." });
         case "helium":
-          if (sources.find((item) => item.key === "helium")?.state === "ready" && !asked.some((entry) => entry === "heliumQuit")) {
-            asked.push("heliumQuit");
-            patch("helium", { state: "running" });
-            return failed("running", "Quit Helium first, then import again.");
-          }
           return done({ profiles: ["Default"], imported: 0 });
-        case "arc":
-          return failed("readFailed", "Arc's cookies couldn't be read (database disk image is malformed).");
         default:
           return failed("gone", "That browser or profile is no longer here.");
       }
@@ -197,11 +236,19 @@ const rows = () =>
 const profiles = () =>
   all('[data-slot="import-profile"]').map((element) => ({
     name: text(element.querySelector(".text-label")),
-    cookies: text(element.querySelector(".text-xs")),
+    line: text(element.querySelector(".text-xs")),
+    into: text(element.querySelector("button:not([role=checkbox])")),
     checked: element.querySelector('[role="checkbox"]')?.getAttribute("data-state") === "checked",
   }));
-const toastTexts = () =>
-  all('[data-slot="toast"]').map((element) => ({ tone: element.dataset.tone, text: text(element).replace(/Dismiss$/, "") }));
+const results = () =>
+  all('[data-slot="import-result"]').map((element) => ({
+    name: text(element.querySelector(".font-medium")),
+    badge: text(element.querySelector('[data-slot="badge"]')),
+    parts: all('[data-slot="import-part"]', element).map((part) => [part.dataset.mark, text(part)]),
+    sites: all('[data-slot="import-site"]', element).map(text),
+    google: text(element.querySelector('[data-slot="import-google"]')),
+  }));
+const bring = () => all('[role="checkbox"]', dialog() ?? document).slice(-4).map((box) => box.getAttribute("data-state"));
 const tickProfile = (name: string) =>
   all('[data-slot="import-profile"]')
     .find((element) => text(element.querySelector(".text-label")) === name)
@@ -215,27 +262,33 @@ const VIEWS: Record<string, () => void> = {
   choose: () => rowButton("dia")?.click(),
   importing: () => {
     rowButton("dia")?.click();
-    setTimeout(() => button("Import 2,841 cookies")?.click(), 200);
+    setTimeout(() => button("Import 2 profiles")?.click(), 200);
+  },
+  results: () => {
+    rowButton("safari")?.click();
+    patch("safari", { state: "ready", profiles: one("safari", 12) });
+    setTimeout(() => button("I've turned it on")?.click(), 200);
+    setTimeout(() => button("Import 1 profile")?.click(), 500);
   },
   fda: () => rowButton("safari")?.click(),
   "fda-still-off": () => {
     rowButton("safari")?.click();
     setTimeout(() => button("I've turned it on")?.click(), 200);
   },
-  "blocked-keychain": () => rowButton("edge")?.click(),
-  "blocked-running": () => rowButton("helium")?.click(),
-  toast: () => rowButton("helium")?.click(),
+  "blocked-keychain": () => {
+    rowButton("edge")?.click();
+    setTimeout(() => button("Import 1 profile")?.click(), 200);
+  },
+  "blocked-running": () => {
+    rowButton("helium")?.click();
+    setTimeout(() => button("Import 1 profile")?.click(), 200);
+  },
 };
 
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
     if (view && !params.has("drive")) {
-      if (view === "toast") {
-        // Helium's first try is refused as running; asking again imports.
-        patch("helium", { state: "ready" });
-        asked.push("heliumQuit");
-      }
       const timer = setTimeout(() => VIEWS[view]?.(), 300);
       return () => clearTimeout(timer);
     }
@@ -252,47 +305,57 @@ function Fixture() {
         seen.rows = rows();
         rowButton("dia")?.click();
       },
-      // Several profiles: the picker, the default ticked, history on.
+      // The picker: what isn't here yet ticked as a new profile, and every part.
       () => {
         seen.choose = { ...readDialog(), profiles: profiles() };
-        seen.historyBox = all('[role="checkbox"]', dialog() ?? document).at(-1)?.getAttribute("data-state");
+        seen.bring = bring();
         tickProfile("Work");
       },
       () => {
-        seen.bothTicked = { profiles: profiles(), buttons: readDialog()?.buttons };
+        seen.personalOnly = readDialog()?.buttons.slice(-2);
         tickProfile("Personal");
       },
       () => {
-        seen.workOnly = readDialog()?.buttons;
-        tickProfile("Work");
-      },
-      () => {
-        seen.noneTicked = readDialog()?.buttons;
+        seen.noneTicked = readDialog()?.buttons.slice(-2);
         tickProfile("Personal");
         tickProfile("Work");
       },
       () => {
-        // History off, then on again: the import asks for it.
-        all<HTMLButtonElement>('[role="checkbox"]', dialog() ?? document).at(-1)?.click();
+        // Bookmarks off, then on again: the import asks for them.
+        all<HTMLButtonElement>('[role="checkbox"]', dialog() ?? document).at(-2)?.click();
       },
       () => {
-        seen.historyOff = all('[role="checkbox"]', dialog() ?? document).at(-1)?.getAttribute("data-state");
-        all<HTMLButtonElement>('[role="checkbox"]', dialog() ?? document).at(-1)?.click();
+        seen.bookmarksOff = bring()[2];
+        all<HTMLButtonElement>('[role="checkbox"]', dialog() ?? document).at(-2)?.click();
       },
-      () => button("Import 4,045 cookies")?.click(),
+      () => button("Import 2 profiles")?.click(),
       // Importing: no close button, and neither Esc nor a click outside ends it.
       () => {
         seen.importing = { ...readDialog(), rowsEnabled: rows().filter((item) => item.enabled).map((item) => item.name) };
         escape();
-        document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]')?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        // A whole press: the dialog weighs an outside press when it is released.
+        const overlay = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]');
+        overlay?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }));
+        overlay?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerType: "mouse" }));
+        overlay?.click();
       },
       () => {
         seen.stillImporting = dialog()?.dataset.step ?? null;
         release?.();
       },
+      // The results, part by part; a part that failed tries again alone.
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 200));
-        seen.imported = { dialog: readDialog(), toasts: toastTexts(), dia: rows().find((item) => item.name === "Dia") };
+        seen.results = { ...readDialog(), profiles: results() };
+        button("Try again")?.click();
+      },
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        seen.retried = results()[1]?.parts.find((part) => part[1]?.startsWith("Bookmarks"));
+        button("Done")?.click();
+      },
+      () => {
+        seen.imported = { dialog: readDialog(), dia: rows().find((item) => item.name === "Dia") };
         rowButton("safari")?.click();
       },
       // Full Disk Access: still off the first time.
@@ -309,9 +372,28 @@ function Fixture() {
       },
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 300));
-        seen.fdaOn = { dialog: readDialog(), toasts: toastTexts() };
-        rowButton("edge")?.click();
+        seen.fdaOn = readDialog()?.step;
+        button("Import 1 profile")?.click();
       },
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        seen.safari = { description: readDialog()?.description, buttons: readDialog()?.buttons, profiles: results() };
+        button("Done")?.click();
+        patch("firefox", { profiles: one("firefox", 5) });
+        button("Refresh")?.click();
+      },
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        rowButton("firefox")?.click();
+      },
+      () => button("Import 1 profile")?.click(),
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        seen.firefox = { description: readDialog()?.description, buttons: readDialog()?.buttons, passwords: results()[0]?.parts.at(-1) };
+        button("Done")?.click();
+      },
+      () => rowButton("edge")?.click(),
+      () => button("Import 1 profile")?.click(),
       // Edge's Keychain key refused: the blocked dialog.
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 200));
@@ -322,7 +404,12 @@ function Fixture() {
         seen.keychainClosed = dialog() === null;
         rowButton("helium")?.click();
       },
-      // Helium is open: "I've quit it" looks again and imports.
+      () => {
+        seen.heliumParts = all('[data-slot="import-dialog"] [role="checkbox"]').length;
+        seen.heliumNote = readDialog()?.notes[1];
+        button("Import 1 profile")?.click();
+      },
+      // Helium is open: "I've quit it" looks again and asks again.
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 200));
         seen.running = readDialog();
@@ -331,12 +418,25 @@ function Fixture() {
       },
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 300));
-        seen.quit = { dialog: readDialog(), toasts: toastTexts() };
-        rowButton("arc")?.click();
+        button("Import 1 profile")?.click();
       },
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 200));
-        seen.readFailed = { dialog: readDialog(), toasts: toastTexts() };
+        seen.quit = readDialog()?.description;
+        button("Done")?.click();
+      },
+      () => rowButton("arc")?.click(),
+      () => button("Import 1 profile")?.click(),
+      // A read that fails shows in the results.
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        seen.readFailed = { description: readDialog()?.description, buttons: readDialog()?.buttons, profiles: results() };
+        // A browser that can't be read makes no profile.
+        seen.madeForFailedRead = allProfiles().some((each) => each.name === "Arc: Default");
+        button("Done")?.click();
+      },
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
         seen.listedBefore = listed;
         rowButton("chrome")?.click();
       },

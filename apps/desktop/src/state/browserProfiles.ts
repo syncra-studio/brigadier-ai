@@ -182,9 +182,8 @@ export function profileCounts(id: string): Promise<ProfileCounts> {
   return invoke<ProfileCounts>("browser_profile_counts", { profile: id });
 }
 
-/** Clears a profile's data, and its open pages show that at once, signed out. Other profiles aren't touched. */
-export async function clearProfile(id: string): Promise<void> {
-  await invoke("browser_profile_clear", { profile: id });
+/** A profile's cookies went: its open pages show that at once, signed out. */
+export function reloadProfileTabs(id: string): void {
   const { pages } = useBrowsers.getState();
   for (const tab of browserTabsOn(id)) {
     if (pages[tab.id]?.ready) void browserGo(tab.id, "reload").catch(() => {});
