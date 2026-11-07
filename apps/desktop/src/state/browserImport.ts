@@ -73,6 +73,7 @@ export type ImportedRecord = ImportRecord & {
   passwords?: number;
   passwordsSkipped?: number;
   bookmarks?: number;
+  googleLeftOut?: number;
   appBoundDomains?: string[];
 };
 export type ImportedOutcome =

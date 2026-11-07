@@ -34,9 +34,13 @@
 //! > DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 //! > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+#[cfg(test)]
 use aes::cipher::block_padding::Pkcs7;
+#[cfg(test)]
 use aes::cipher::{BlockModeEncrypt, KeyIvInit};
+#[cfg(test)]
 use aes_gcm::aead::{Aead, AeadCore, OsRng};
+#[cfg(test)]
 use aes_gcm::{Aes256Gcm, KeyInit};
 
 use crate::{Error, Profile, SecretError};
@@ -115,6 +119,24 @@ impl ChromiumKeys {
             Err(failure) => keys.v11_failure = Some(failure),
         }
         Ok(keys)
+    }
+
+    /// Seals `plain` the way a Chromium on this OS expects to find it, for the tests' made-up stores.
+    #[cfg(test)]
+    pub(crate) fn seal(&self, plain: &[u8]) -> Option<Vec<u8>> {
+        if let Some(key) = &self.gcm_v10 {
+            let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+            let sealed = Aes256Gcm::new(key.into()).encrypt(&nonce, plain).ok()?;
+            return Some([b"v10".as_slice(), nonce.as_slice(), &sealed].concat());
+        }
+        let (prefix, key) = match (self.cbc_empty.is_some(), self.cbc_v11, self.cbc_v10) {
+            (true, Some(key), _) => (b"v11", key),
+            (_, _, Some(key)) => (b"v10", key),
+            _ => return None,
+        };
+        let encryptor = cbc::Encryptor::<aes::Aes128>::new(&key.into(), &[b' '; 16].into());
+        let sealed = encryptor.encrypt_padded_vec::<Pkcs7>(plain);
+        Some([prefix.as_slice(), &sealed].concat())
     }
 
     /// Why this browser's `v11` values can't be opened, when the keyring wouldn't help.

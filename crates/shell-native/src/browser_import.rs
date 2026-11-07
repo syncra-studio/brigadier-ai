@@ -159,18 +159,10 @@ pub struct Parts {
 
 /// One saved password on its way to the profile's vault.
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Login {
-    pub origin_url: String,
-    pub action_url: String,
-    pub signon_realm: String,
-    pub username_element: String,
+    pub url: String,
     pub username: String,
-    pub password_element: String,
     pub password: String,
-    pub scheme: i64,
-    pub created_at_ms: Option<i64>,
-    pub last_used_at_ms: Option<i64>,
 }
 
 /// One profile read for import, or why it can't be.
@@ -192,6 +184,8 @@ pub enum ReadOutcome {
 #[serde(rename_all = "camelCase")]
 pub struct ReadProfile {
     pub profile_name: String,
+    /// The source's sign-ins were read, even if there are none: importing over a profile swaps them.
+    pub sign_ins_read: bool,
     pub cookies: Vec<Cookie>,
     /// Domains whose cookies couldn't be opened or can't be kept, one per cookie.
     pub left_out_domains: Vec<String>,
@@ -203,6 +197,8 @@ pub struct ReadProfile {
     pub history_error: Option<String>,
     pub bookmarks: Vec<Bookmark>,
     pub bookmarks_error: Option<String>,
+    /// The source's passwords were read, even if there are none: importing over a profile swaps them.
+    pub passwords_read: bool,
     pub logins: Vec<Login>,
     pub logins_left_out: u32,
     pub passwords_error: Option<String>,
@@ -336,6 +332,7 @@ fn read_profile(source: &Source, profile: &Profile, what: &Parts) -> Result<Read
                 return Err(failed(reason, message));
             }
         }
+        out.sign_ins_read = true;
         if chromium {
             out.site_storage_from = Some(profile.dir.clone());
         }
@@ -370,19 +367,13 @@ fn read_profile(source: &Source, profile: &Profile, what: &Parts) -> Result<Read
                     .into_iter()
                     .map(|credential| Login {
                         password: credential.password.reveal().to_owned(),
-                        origin_url: credential.origin_url,
-                        action_url: credential.action_url,
-                        signon_realm: credential.signon_realm,
-                        username_element: credential.username_element,
+                        url: credential.origin_url,
                         username: credential.username,
-                        password_element: credential.password_element,
-                        scheme: credential.scheme,
-                        created_at_ms: credential.created_at_ms,
-                        last_used_at_ms: credential.last_used_at_ms,
                     })
                     .collect();
+                out.passwords_read = true;
             }
-            Err(Error::NotFound(_)) => {}
+            Err(Error::NotFound(_)) => out.passwords_read = true,
             Err(error) => out.passwords_error = Some(password_failure(&error, browser)),
         }
     }

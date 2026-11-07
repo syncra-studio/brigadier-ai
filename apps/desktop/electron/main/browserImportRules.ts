@@ -39,6 +39,12 @@ export function cookieDetails(cookie: ReadCookie, nowSeconds: number): CookiesSe
   };
 }
 
+/** A cookie of google.com or a subdomain. Orca (MIT) leaves these out of its imports for the same reason. */
+export function isGoogleCookie(domain: string): boolean {
+  const host = domain.replace(/^\./, "").toLowerCase();
+  return host === "google.com" || host.endsWith(".google.com");
+}
+
 /** The distinct domains among `domains`, without a leading dot: the first `kept`, and how many in all. */
 export function distinctDomains(domains: readonly string[], kept = 20): { shown: string[]; count: number } {
   const seen = new Set(domains.map((domain) => domain.replace(/^\./, "").toLowerCase()).filter(Boolean));

@@ -97,6 +97,9 @@ function ProfileResult({
             />
           ))}
           {more > 0 && <p className="text-foreground/65 ps-6 text-xs">and {counted(more, "more site", "more sites")}</p>}
+          {(record.googleLeftOut ?? 0) > 0 && (
+            <p data-slot="import-google" className="text-foreground/65 ps-6 text-xs">Google sign-ins aren't imported: sign in once here</p>
+          )}
           {outcome.siteStorage === "nextStart" && (
             <p data-slot="import-next-start" className="text-foreground/65 ps-6 text-xs">Sites that keep their sign-in in page storage catch up when Brigadier next starts.</p>
           )}
@@ -123,7 +126,7 @@ function ProfileResult({
           mark={outcome.passwordsError ? "no" : (record.passwordsSkipped ?? 0) > 0 ? "part" : "yes"}
           name="Passwords"
           line={outcome.passwordsError
-            ?? `${counted(record.passwords ?? 0, "password", "passwords")}${(record.passwordsSkipped ?? 0) > 0 ? ` · ${counted(record.passwordsSkipped ?? 0, "couldn't be opened", "couldn't be opened")}` : ""}`}
+            ?? `${counted(record.passwords ?? 0, "password", "passwords")}${(record.passwordsSkipped ?? 0) > 0 ? ` · ${counted(record.passwordsSkipped ?? 0, "left out", "left out")}` : ""}`}
           onRetry={outcome.passwordsError && passwordsRetryable(source.family) ? () => onRetry("passwords") : undefined}
         />
       )}

@@ -10,8 +10,8 @@ import { app, session, shell, webContents, type Session } from "electron";
 import { addCommands, channelId, channelSender, type Args } from "./commands";
 import { importBookmarks } from "./browserBookmarks";
 import { importHistory } from "./browserHistory";
-import { cookieDetails, distinctDomains, firstImport, type ReadCookie } from "./browserImportRules";
-import { importLogins } from "./browserVault";
+import { cookieDetails, distinctDomains, firstImport, isGoogleCookie, type ReadCookie } from "./browserImportRules";
+import { importLogins, replaceLogins } from "./browserVault";
 import { replaceFile } from "./durableStorage";
 import { note } from "./events";
 import { dev } from "./identity";
@@ -27,6 +27,7 @@ type Parts = { signIns: boolean; history: boolean; bookmarks: boolean; passwords
 type ReadProfile = {
   type: "read";
   profileName: string;
+  signInsRead: boolean;
   cookies: ReadCookie[];
   leftOutDomains: string[];
   appBoundDomains: string[];
@@ -35,6 +36,7 @@ type ReadProfile = {
   historyError: string | null;
   bookmarks: { url: string; title: string; root: string; folders: string[]; added_at_ms: number | null }[];
   bookmarksError: string | null;
+  passwordsRead: boolean;
   logins: Parameters<typeof importLogins>[1][number][];
   loginsLeftOut: number;
   passwordsError: string | null;
@@ -54,6 +56,7 @@ type Record = {
   bookmarks: number;
   passwords: number;
   passwordsSkipped: number;
+  googleLeftOut: number;
 };
 /** What's kept of imports: each browser's last, each source profile's place here, and the notice seen. */
 type Saved = {
@@ -199,7 +202,10 @@ async function writeProfile({ token, target, replace, progress }: Args, sender: 
   const partition = profilePartition(profileId);
   const tell = channelSender(sender, channelId(progress));
   const replacing = replace === true;
-  const signIns = read.cookies.length + read.leftOutDomains.length + read.appBoundDomains.length > 0 || read.siteStorageFrom !== null;
+  const signIns = read.signInsRead;
+  // Google binds these to the browser that made them, so they can't keep anyone signed in here.
+  const cookies = read.cookies.filter((cookie) => !isGoogleCookie(cookie.domain));
+  const googleLeftOut = read.cookies.length - cookies.length;
 
   let refused: string[] = [];
   let siteStorage: "copied" | "nextStart" | null = null;
@@ -212,9 +218,9 @@ async function writeProfile({ token, target, replace, progress }: Args, sender: 
       await target.clearStorageData({ storages: storages as never });
       target.flushStorageData();
     }
-    const total = read.cookies.length;
+    const total = cookies.length;
     tell(JSON.stringify({ type: "cookies", done: 0, total }));
-    refused = await addCookies(target, read.cookies, (done) => tell(JSON.stringify({ type: "cookies", done, total })));
+    refused = await addCookies(target, cookies, (done) => tell(JSON.stringify({ type: "cookies", done, total })));
     if (replacing) {
       // Their pages were signed in as someone else: the page said they would reload.
       for (const contents of webContents.getAllWebContents()) {
@@ -236,16 +242,21 @@ async function writeProfile({ token, target, replace, progress }: Args, sender: 
   let bookmarks = 0;
   if (read.bookmarks.length > 0) {
     try {
-      bookmarks = importBookmarks(profileId, read.bookmarks);
+      const added = await importBookmarks(profileId, read.bookmarks.map((bookmark) => ({ url: bookmark.url, title: bookmark.title, folders: bookmark.folders, ...(bookmark.added_at_ms === null ? {} : { addedMs: bookmark.added_at_ms }) })));
+      bookmarks = added.added;
     } catch (error) {
       bookmarksError = `Bookmarks couldn't be added (${String(error)}).`;
     }
   }
   let passwordsError = read.passwordsError;
   let passwords = 0;
-  if (read.logins.length > 0) {
+  let passwordsSkipped = read.loginsLeftOut;
+  // Importing over a profile swaps its passwords, so a source with none leaves it with none.
+  if (read.passwordsRead && (replacing || read.logins.length > 0)) {
     try {
-      passwords = importLogins(profileId, read.logins);
+      const counts = await (replacing ? replaceLogins : importLogins)(profileId, read.logins);
+      passwords = counts.added + counts.updated + counts.unchanged;
+      passwordsSkipped += counts.skipped;
     } catch {
       // Not the error's text: nothing about a password's store needs repeating.
       passwordsError = "Passwords couldn't be saved.";
@@ -255,7 +266,7 @@ async function writeProfile({ token, target, replace, progress }: Args, sender: 
   const record: Record = {
     atMs: Date.now(),
     profiles: [read.profileName],
-    imported: read.cookies.length - refused.length,
+    imported: cookies.length - refused.length,
     skipped: read.leftOutDomains.length + read.appBoundDomains.length + refused.length,
     skippedDomains: domains.shown,
     skippedDomainCount: domains.count,
@@ -263,7 +274,8 @@ async function writeProfile({ token, target, replace, progress }: Args, sender: 
     history,
     bookmarks,
     passwords,
-    passwordsSkipped: read.loginsLeftOut,
+    passwordsSkipped,
+    googleLeftOut,
   };
   changeSaved((saved) => {
     saved.noticed = true;
