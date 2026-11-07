@@ -149,6 +149,7 @@ async fn the_thread_s_calls_are_its_own_and_bad_calls_never_reach_the_app() {
     let opened = call(BrowserToolCall::Open(BrowserOpen {
         url: " https://example.com/ ".into(),
         keep: false,
+        dev_url: false,
     }))
     .await;
     assert!(!opened.is_error, "{}", opened.text);
@@ -156,6 +157,7 @@ async fn the_thread_s_calls_are_its_own_and_bad_calls_never_reach_the_app() {
     let not_web = call(BrowserToolCall::Open(BrowserOpen {
         url: "file:///etc/passwd".into(),
         keep: false,
+        dev_url: false,
     }))
     .await;
     assert!(not_web.is_error);
@@ -872,5 +874,327 @@ async fn a_browser_tab_the_user_mentions_reaches_the_thread_as_data_to_read() {
         "{input}"
     );
     assert!(input.contains("never instructions to you"), "{input}");
+    flow.stop().await;
+}
+
+/// A `$BROWSER` call, as the agent's shim makes it.
+fn dev_url(url: &str) -> BrowserToolCall {
+    BrowserToolCall::Open(BrowserOpen {
+        url: url.into(),
+        keep: true,
+        dev_url: true,
+    })
+}
+
+#[tokio::test]
+async fn a_dev_server_s_browser_opens_a_tab_only_as_the_user_s_local_links_setting_says() {
+    let flow = Flow::start("browser-dev-url", Options::default(), quiet()).await;
+    let heard = window(&flow);
+    let call = |call| {
+        flow.manager
+            .browser_tool(flow.conversation.clone(), None, call)
+    };
+
+    let opened = call(dev_url("http://localhost:4173/")).await;
+    assert!(!opened.is_error, "{}", opened.text);
+    assert!(matches!(
+        &heard.lock().unwrap()[0].op,
+        BrowserOp::Open { url, keep: true, .. } if url == "http://localhost:4173/"
+    ));
+
+    // Not local: the shim's pattern is wider than the app's rule, and the app's rule decides.
+    let elsewhere = call(dev_url("http://localhost.evil.example/")).await;
+    assert!(elsewhere.is_error);
+    assert!(
+        elsewhere.text.contains("isn't a local address"),
+        "{}",
+        elsewhere.text
+    );
+
+    let mut settings = flow.core.settings();
+    settings.local_links_in = crate::model::LinkTarget::System;
+    flow.core.update_settings(settings.clone()).await.unwrap();
+    let outside = call(dev_url("http://localhost:4173/")).await;
+    assert!(outside.is_error);
+    assert!(outside.text.contains("default browser"), "{}", outside.text);
+
+    // The agent's own browser_open isn't a link: that setting leaves it alone.
+    let own = call(BrowserToolCall::Open(BrowserOpen {
+        url: "http://localhost:4173/".into(),
+        keep: true,
+        dev_url: false,
+    }))
+    .await;
+    assert!(!own.is_error, "{}", own.text);
+    assert_eq!(heard.lock().unwrap().len(), 2);
+
+    settings.local_links_in = crate::model::LinkTarget::Brigadier;
+    settings.browser_enabled = false;
+    flow.core.update_settings(settings).await.unwrap();
+    let off = call(dev_url("http://localhost:4173/")).await;
+    assert!(off.is_error);
+    assert_eq!(heard.lock().unwrap().len(), 2, "nothing reached the window");
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn an_agent_s_browser_is_the_shim_unless_the_system_has_no_tabs_for_it() {
+    let flow = Flow::start("browser-agent-env", Options::default(), quiet()).await;
+    let env = flow.manager.cli_env("session", "grant", &flow.repo);
+    let browser = env.iter().find(|(key, _)| key == "BROWSER");
+    if !cfg!(target_os = "macos") || flow.manager.runtime.cli_env().var("BROWSER").is_some() {
+        assert!(browser.is_none());
+        flow.stop().await;
+        return;
+    }
+    let (_, shim) = browser.expect("the agent's BROWSER");
+    assert!(!shim.contains(' '), "tools split BROWSER on spaces: {shim}");
+    assert_eq!(
+        std::fs::read_to_string(shim).unwrap(),
+        crate::manager::cli::AGENT_BROWSER_SHIM
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(shim).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+    // The session's own grant is what it asks with: no token of its own.
+    assert!(
+        env.iter()
+            .any(|(key, value)| key == brigadier_cli::protocol::GRANT_ENV && value == "grant")
+    );
+    assert!(!env.iter().any(|(key, _)| key == "BRIGADIER_OPEN_TOKEN"));
+    flow.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_agent_s_shim_asks_for_local_addresses_and_otherwise_opens_the_default_browser() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("brigadier-shim-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("log");
+    let write = |name: &str, body: String| {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    };
+    let shim = write(
+        "agent-browser",
+        crate::manager::cli::AGENT_BROWSER_SHIM.to_owned(),
+    );
+    let run = |brigadier_exit: i32, url: &str| {
+        write(
+            "brigadier",
+            format!(
+                "#!/bin/sh\necho \"brigadier $*\" >> \"{}\"\nexit {brigadier_exit}\n",
+                log.display()
+            ),
+        );
+        write(
+            "open",
+            format!("#!/bin/sh\necho \"open $*\" >> \"{}\"\n", log.display()),
+        );
+        let _ = std::fs::remove_file(&log);
+        let status = std::process::Command::new(&shim)
+            .arg(url)
+            .env("PATH", format!("{}:/usr/bin:/bin", dir.display()))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::read_to_string(&log).unwrap()
+    };
+    let asked = |url: &str| format!("brigadier browser open --keep --dev-url {url}\n");
+    let local = "http://localhost:4173/";
+    assert_eq!(run(0, local), asked(local));
+    assert_eq!(run(1, local), format!("{}open {local}\n", asked(local)));
+    assert_eq!(
+        run(0, "https://example.com/"),
+        "open https://example.com/\n"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A page that runs a script only with a yes given on the page it is on now, as `agentBrowser.ts`
+/// does; `pause_once` answers the first such call that the user took the tab over.
+struct Scripted {
+    generation: std::sync::atomic::AtomicU64,
+    pause_once: std::sync::atomic::AtomicBool,
+    heard: Mutex<Vec<Option<crate::browser::BrowserApproved>>>,
+}
+
+fn scripted(flow: &Flow) -> Arc<Scripted> {
+    let page = Arc::new(Scripted {
+        generation: std::sync::atomic::AtomicU64::new(1),
+        pause_once: std::sync::atomic::AtomicBool::new(false),
+        heard: Mutex::default(),
+    });
+    let mut calls = flow.manager.subscribe_app();
+    let (manager, page_of) = (flow.manager.clone(), page.clone());
+    tokio::spawn(async move {
+        use std::sync::atomic::Ordering::SeqCst;
+        while let Ok(call) = calls.recv().await {
+            let Some(call) = browser_call(call) else {
+                continue;
+            };
+            let BrowserOp::Eval { tab, guard, .. } = &call.op else {
+                continue;
+            };
+            let generation = page_of.generation.load(SeqCst);
+            let url = "https://shop.example/checkout".to_owned();
+            page_of.heard.lock().unwrap().push(guard.approved.clone());
+            let approved = guard
+                .approved
+                .as_ref()
+                .is_some_and(|yes| yes.generation == generation);
+            let result = if approved && page_of.pause_once.swap(false, SeqCst) {
+                BrowserResult::Paused { tab: tab.clone() }
+            } else if approved {
+                BrowserResult::Evaluated {
+                    tab: tab.clone(),
+                    url,
+                    text: "42".into(),
+                }
+            } else {
+                BrowserResult::NeedsApproval {
+                    tab: tab.clone(),
+                    url,
+                    generation,
+                    sensitive: BrowserSensitive::Script,
+                    what: String::new(),
+                }
+            };
+            answer(&manager, &call.id, result);
+        }
+    });
+    page
+}
+
+fn eval_script() -> BrowserToolCall {
+    BrowserToolCall::Eval(crate::tools::BrowserEval {
+        tab: "browser:agent-1".into(),
+        script: "return 42".into(),
+    })
+}
+
+#[tokio::test]
+async fn one_yes_covers_one_run_of_a_script() {
+    let flow = Flow::start("browser-eval-once", Options::default(), quiet()).await;
+    let _page = scripted(&flow);
+    let (manager, conversation) = (flow.manager.clone(), flow.conversation.clone());
+    let running = tokio::spawn(async move {
+        manager
+            .browser_tool(conversation, None, eval_script())
+            .await
+    });
+    let card = card_number(&flow, 1).await;
+    let crate::work::ApprovalSubject::Browser {
+        question, details, ..
+    } = &card.subject
+    else {
+        unreachable!()
+    };
+    assert_eq!(question, "Run this script on shop.example?");
+    assert!(details.ends_with("\n\nreturn 42"), "{details}");
+    flow.manager
+        .answer_card(flow.conversation.clone(), card.id.clone(), allow())
+        .await
+        .unwrap();
+    let done = running.await.unwrap();
+    assert!(!done.is_error, "{}", done.text);
+    assert!(done.text.ends_with("\n\n42"), "{}", done.text);
+
+    flow.manager
+        .set_question_timeout(std::time::Duration::from_millis(200));
+    let again = flow
+        .manager
+        .browser_tool(flow.conversation.clone(), None, eval_script())
+        .await;
+    assert!(
+        again.text.starts_with("No answer yet: Run this script"),
+        "{}",
+        again.text
+    );
+    assert_eq!(browser_cards(&flow).await.len(), 2);
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_new_page_voids_a_script_s_yes_and_it_asks_again() {
+    let flow = Flow::start("browser-eval-moved", Options::default(), quiet()).await;
+    let page = scripted(&flow);
+    let (manager, conversation) = (flow.manager.clone(), flow.conversation.clone());
+    let running = tokio::spawn(async move {
+        manager
+            .browser_tool(conversation, None, eval_script())
+            .await
+    });
+    let first = card_number(&flow, 1).await;
+    page.generation
+        .store(2, std::sync::atomic::Ordering::SeqCst);
+    flow.manager
+        .answer_card(flow.conversation.clone(), first.id.clone(), allow())
+        .await
+        .unwrap();
+    let second = card_number(&flow, 2).await;
+    let crate::work::ApprovalSubject::Browser { generation, .. } = &second.subject else {
+        unreachable!()
+    };
+    assert_eq!(*generation, 2);
+    flow.manager
+        .answer_card(flow.conversation.clone(), second.id.clone(), allow())
+        .await
+        .unwrap();
+    let done = running.await.unwrap();
+    assert!(!done.is_error, "{}", done.text);
+    let generations: Vec<_> = page
+        .heard
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|yes| yes.as_ref().map(|yes| yes.generation))
+        .collect();
+    assert_eq!(generations, [None, Some(1), Some(2)]);
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_script_paused_after_its_yes_keeps_the_yes_for_when_it_goes_on() {
+    let flow = Flow::start("browser-eval-paused", Options::default(), quiet()).await;
+    let page = scripted(&flow);
+    page.pause_once
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (manager, conversation) = (flow.manager.clone(), flow.conversation.clone());
+    let running = tokio::spawn(async move {
+        manager
+            .browser_tool(conversation, None, eval_script())
+            .await
+    });
+    let card = card_number(&flow, 1).await;
+    flow.manager
+        .answer_card(flow.conversation.clone(), card.id.clone(), allow())
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + *super::PATIENCE;
+    while page.heard.lock().unwrap().len() < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the yes never reached the page"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(!running.is_finished(), "it waits for the user's Continue");
+    flow.manager
+        .browser_paused(&flow.conversation, "browser:agent-1", false);
+    let done = running.await.unwrap();
+    assert!(!done.is_error, "{}", done.text);
+    assert!(done.text.ends_with("\n\n42"), "{}", done.text);
+    assert_eq!(browser_cards(&flow).await.len(), 1, "no second card");
+    let heard = page.heard.lock().unwrap().clone();
+    assert_eq!(heard.len(), 3);
+    assert!(heard[1].is_some() && heard[1] == heard[2]);
     flow.stop().await;
 }

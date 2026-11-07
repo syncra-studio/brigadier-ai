@@ -1,6 +1,6 @@
 // What an agent's verbs do to a guest (crates/core's browser tool, src/state/agentBrowser.ts). Agents only ever have
-// verbs: nothing here takes protocol methods or code from outside, so the app's page can ask for a click, never for
-// a CDP call or a script. Pages, network and console come from Electron's own events, with no debugger on the tab;
+// verbs: nothing here takes protocol methods, so the app's page can ask for a click, never for a CDP call. Only the
+// eval verb takes code, which main runs as the page's own script (browserDevtoolsEval.ts). Pages, network and console come from Electron's own events, with no debugger on the tab;
 // webContents.debugger is attached only while an agent acts, for trusted input, and goes as soon as the user takes
 // the tab. It is in-process, so no port and no automation switch.
 import { webContents, type WebContents } from "electron";
@@ -9,6 +9,7 @@ import { handleFromApp } from "./appPage";
 import { activityOf, forgetActivity, watchActivity, watchNetwork } from "./browserAgentActivity";
 import { forgetSecrets, pictureForAgent, runScript, sweptAndScrubbed } from "./browserAgentSecrets";
 import { stopOf } from "./browserSignIn";
+import { evalOnPage } from "./browserDevtoolsEval";
 
 export { watchNetwork };
 
@@ -19,6 +20,10 @@ type Held = {
 const held = new Map<number, Held>();
 
 /** The guest of a call from `sender`, which must be the page hosting it. */
+/** Tabs with DevTools open. `isDevToolsOpened` answers false for DevTools in a view of ours (browserDevtools.ts). */
+const opened = new Set<number>();
+export const devToolsOpen = (guest: WebContents): boolean => opened.has(guest.id) || guest.isDevToolsOpened();
+
 function guestFor(sender: WebContents, id: unknown): WebContents {
   const guest = typeof id === "number" ? webContents.fromId(id) : undefined;
   if (!guest || guest.isDestroyed() || guest.getType() !== "webview" || guest.hostWebContents !== sender) throw new Error("That page is gone.");
@@ -31,7 +36,7 @@ function tellHost(guest: WebContents, event: "devtools-opened" | "devtools-close
 
 async function attach(guest: WebContents): Promise<void> {
   if (held.has(guest.id)) return;
-  if (guest.isDevToolsOpened()) throw new Error("devtools_open");
+  if (devToolsOpen(guest)) throw new Error("devtools_open");
   guest.debugger.attach("1.3");
   held.set(guest.id, { queue: Promise.resolve() });
   // A page behind its tab takes input and keeps its timers, and the user's focus going back blurs nothing. The same
@@ -50,13 +55,13 @@ async function release(guest: WebContents): Promise<void> {
 
 /** Runs `input` in the tab's order; an answer the user's take-over overtook is `paused`. */
 async function acting(guest: WebContents, input: (send: (method: string, params: object) => Promise<unknown>) => Promise<void>): Promise<unknown> {
-  if (guest.isDevToolsOpened()) return { paused: "devtools" };
+  if (devToolsOpen(guest)) return { paused: "devtools" };
   await attach(guest);
   const hold = held.get(guest.id);
   if (!hold) return { paused: "user" };
   const run = hold.queue.then(async () => {
     const stillHeld = () => held.get(guest.id) === hold;
-    if (!stillHeld()) return { paused: guest.isDevToolsOpened() ? "devtools" : "user" };
+    if (!stillHeld()) return { paused: devToolsOpen(guest) ? "devtools" : "user" };
     await input((method, params) => guest.debugger.sendCommand(method, params));
     return { done: true };
   });
@@ -65,7 +70,7 @@ async function acting(guest: WebContents, input: (send: (method: string, params:
     return await run;
   } catch (error) {
     if (guest.isDestroyed()) throw new Error("The tab closed.", { cause: error });
-    if (guest.isDevToolsOpened() || !guest.debugger.isAttached()) return { paused: guest.isDevToolsOpened() ? "devtools" : "user" };
+    if (devToolsOpen(guest) || !guest.debugger.isAttached()) return { paused: devToolsOpen(guest) ? "devtools" : "user" };
     throw error;
   }
 }
@@ -82,14 +87,15 @@ const mouse = (type: string, x: number, y: number, buttons: number) => ({
 /** DevTools ends a debugger session (electron.d.ts, Debugger's `detach`), so opening it counts as take-over. */
 function watchDevTools(guest: WebContents): void {
   guest.on("devtools-opened", () => {
+    opened.add(guest.id);
     tellHost(guest, "devtools-opened");
     void release(guest);
   });
-  guest.on("devtools-closed", () => tellHost(guest, "devtools-closed"));
+  guest.on("devtools-closed", () => devToolsEnded(guest));
   guest.debugger.on("detach", () => {
     // Ours forgets the hold first, so a hold still here was ended from outside: nothing resumes by itself.
     if (!held.delete(guest.id) || guest.isDestroyed()) return;
-    tellHost(guest, guest.isDevToolsOpened() ? "devtools-opened" : "detached");
+    tellHost(guest, devToolsOpen(guest) ? "devtools-opened" : "detached");
   });
 }
 
@@ -103,6 +109,12 @@ export async function beforeDevTools(guest: WebContents): Promise<void> {
   await release(guest);
 }
 
+/** DevTools went from this tab. Closing DevTools held in a view of ours fires no `devtools-closed`, so its view's end says so. */
+export function devToolsEnded(guest: WebContents): void {
+  opened.delete(guest.id);
+  if (!guest.isDestroyed()) tellHost(guest, "devtools-closed");
+}
+
 /** Every tab's guest, from when it is made. */
 export function watchGuest(guest: WebContents): void {
   const id = guest.id;
@@ -110,6 +122,7 @@ export function watchGuest(guest: WebContents): void {
   watchDevTools(guest);
   guest.once("destroyed", () => {
     held.delete(id);
+    opened.delete(id);
     forgetActivity(id);
     forgetSecrets(id);
   });
@@ -133,6 +146,8 @@ export function installBrowserAgent(): void {
       case "script":
         // A sweep's answer holds field values, and stays in this process.
         if (call.op.kind === "sweep") throw new Error("Unknown agent call");
+        // The one way code from outside reaches a page: the user read it on a card and said yes (agentBrowser.ts).
+        if (call.op.kind === "eval") return evalOnPage(guest, String(call.op.script));
         return sweptAndScrubbed(guest, () => runScript(guest, call.op));
       case "attach":
         return attach(guest);

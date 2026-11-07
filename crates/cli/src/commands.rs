@@ -608,6 +608,9 @@ pub const COMMANDS: &[Command] = &[
                   `click <ref>`, `type <ref> <text…>`, `screenshot`, `close` and `show` act \
                   on the tab `--tab` names. `read` lists the page's controls by ref (`e12`). \
                   `events` tells what happened in the tab: its pages, network and console. \
+                  `eval <script>` runs JavaScript in the page of a tab you work in, on any site: \
+                  an expression, or statements that `return`; `await` works. The user sees the \
+                  script on a card and says yes or no each time, and the answer comes back as text. \
                   Password fields are hidden from all of these and can't be typed into: the \
                   user fills them in. \
                   Set `--asks` when a click or typing pays, sends something in the user's name \
@@ -624,6 +627,7 @@ pub const COMMANDS: &[Command] = &[
                     "close",
                     "show",
                     "events",
+                    "eval",
                 ],
                 "What to do.",
             ),
@@ -631,6 +635,11 @@ pub const COMMANDS: &[Command] = &[
             switch(
                 "keep",
                 "open: the page is for the user, so the tab stays open.",
+            ),
+            switch(
+                "dev-url",
+                "open: what `$BROWSER` asks for a dev server: refused unless the address is \
+                 local and the user's local links open in Brigadier.",
             ),
             choice(
                 "go",

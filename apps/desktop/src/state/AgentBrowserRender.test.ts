@@ -13,6 +13,20 @@ const HIDDEN = "(A password field, hidden: only the user fills it in.)";
 test("browser tool: the page script reads, clicks, types and asks first", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "agent-browser.html", "agent-browser-result", 60000)) as Record<string, unknown>;
   if (process.env.AGENT_BROWSER_SEEN) console.log(JSON.stringify(seen, null, 2));
+  // What a script gave comes back as text, whatever it was.
+  assert.equal((seen.evalCycle as { text: string }).text, JSON.stringify({ name: "loop", self: "(seen above)" }, null, 2));
+  assert.equal((seen.evalElement as { text: string }).text, JSON.stringify({ field: "<input#email>" }, null, 2));
+  assert.equal((seen.evalBigint as { text: string }).text, JSON.stringify({ big: "12n" }, null, 2));
+  assert.deepEqual(seen.evalUndefined, { text: "undefined" });
+  assert.deepEqual(seen.evalString, { text: "plain" });
+  // A picked element never carries what a field holds.
+  const picked = JSON.stringify([seen.describeName, seen.describePassword]);
+  assert.doesNotMatch(picked, /Ada Lovelace|hunter2/);
+  const named = seen.describeName as { selector: string; tag: string; attrs: Record<string, string>; text: string; password: boolean };
+  assert.equal(named.selector, "#name");
+  assert.deepEqual([named.tag, named.attrs.name, named.text, named.password], ["input", "name", "", false]);
+  assert.equal((seen.describePassword as { password: boolean }).password, true);
+  assert.equal((seen.describeButton as { text: string }).text, "Add one");
   const read = seen.read as { url: string; title: string; text: string };
   const page = read.url;
   assert.match(page, /\/fixtures\/agent-browser\.html$/);

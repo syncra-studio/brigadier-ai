@@ -1,6 +1,7 @@
 // A stand-in for the `electron` package, so `node --test` can load main's modules (`electron/main/*`). Importing this
 // makes `electron` resolve to this very file and lets main's imports go without an extension, as the bundler does. So
 // a test imports this first and then what it tests by `await import`, since a static import resolves before this runs.
+import { EventEmitter } from "node:events";
 import { readFileSync, statSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -83,6 +84,19 @@ export const ipcMain = {
 };
 export const session = {};
 export const BrowserWindow = { fromWebContents: () => fake.hostWindow };
+/** DevTools' pane: its contents, and where it was put and whether it shows. */
+export class WebContentsView {
+  webContents = Object.assign(new EventEmitter(), {
+    destroyed: false,
+    isDestroyed() { return this.destroyed; },
+    close() { this.destroyed = true; this.emit("destroyed"); },
+    setWindowOpenHandler: () => {},
+  });
+  bounds: unknown = null;
+  visible = true;
+  setBounds(bounds: unknown) { this.bounds = bounds; }
+  setVisible(visible: boolean) { this.visible = visible; }
+}
 export const screen = {};
 export const dialog = {};
 export const protocol = {};

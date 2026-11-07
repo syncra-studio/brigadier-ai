@@ -1,3 +1,4 @@
+import { BrowserScript } from "@/app/conversation/cards/BrowserScript";
 import { memo, type ReactNode, useState } from "react";
 
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
@@ -153,7 +154,7 @@ function describe(
         icon: <Globe />,
         title: subject.question,
         subtitle: by,
-        body: <p data-slot="approval-card-text" className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere"><CodeSpans text={subject.details} /></p>,
+        body: subject.sensitive === "script" ? <BrowserScript details={subject.details} /> : <p data-slot="approval-card-text" className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere"><CodeSpans text={subject.details} /></p>,
       };
     case "plan":
       return {
