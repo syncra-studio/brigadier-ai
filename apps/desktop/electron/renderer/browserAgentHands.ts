@@ -33,11 +33,12 @@ export async function agentRun(id: string, op: Answer): Promise<unknown> {
   try {
     if (op.kind === "type") {
       const typed = await script(guest, { kind: "insert", target: op.target, text: op.text });
-      return typed && "error" in typed || op.submit !== true ? typed : await agent({ call: "enter", guest });
+      return typed && "error" in typed || op.submit !== true ? typed : await whilePainting(id, () => agent({ call: "enter", guest }));
     }
     if (Math.abs(there.x - point.x) > 0.5 || Math.abs(there.y - point.y) > 0.5) await glideTo(id, String(op.label ?? "Brigadier"), { x: there.x * zoom, y: there.y * zoom });
     pressAt(id);
-    return await agent({ call: "click", guest, x: there.x * zoom, y: there.y * zoom });
+    // A page behind its tab is visibility:hidden, and input sent to it reaches nothing though the call succeeds.
+    return await whilePainting(id, () => agent({ call: "click", guest, x: there.x * zoom, y: there.y * zoom }));
   } finally {
     release();
   }
@@ -76,6 +77,10 @@ function maybePage(id: string) {
 export function agentLoad(id: string, url: string): void {
   if (!/^https?:/i.test(url)) throw new Error(`${url} isn't a web address.`);
   loadPage(id, url);
+}
+
+export function agentSignInStop(id: string): Promise<unknown> {
+  return agent({ call: "signInStop", guest: agentPage(id).guest });
 }
 
 export function agentEvents(id: string, since: number, kinds: readonly string[]): Promise<unknown> {

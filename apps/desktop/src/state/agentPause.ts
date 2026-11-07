@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { request } from "@/ipc/client";
+import type { SignInStop } from "@/state/browserSignIn";
 import { type BrowserDriver, sessionTabs, sessionWith } from "@/state/sessionTabs";
 
 /**
@@ -9,7 +10,7 @@ import { type BrowserDriver, sessionTabs, sessionWith } from "@/state/sessionTab
  * from the page, so the page loading again can't undo it. The daemon holds the agent's calls
  * on a paused tab.
  */
-export const useAgentPause = create<{ paused: Record<string, string>; devtools: Record<string, true> }>(() => ({ paused: {}, devtools: {} }));
+export const useAgentPause = create<{ paused: Record<string, string>; devtools: Record<string, true>; asked: Record<string, SignInStop> }>(() => ({ paused: {}, devtools: {}, asked: {} }));
 
 /** The agent working Browser tab `id`, with its session; null for the user's own tabs. */
 export function driverOf(id: string): { conversationId: string; driver: BrowserDriver } | null {
@@ -42,6 +43,15 @@ export function userUsed(id: string): void {
   const owner = driverOf(id);
   if (!owner) return;
   useAgentPause.setState(({ paused }) => ({ paused: { ...paused, [id]: owner.conversationId } }));
+  tell(owner.conversationId, id, true);
+}
+
+/** Tab `id`'s page is for the user alone (state/browserSignIn.ts): its agent pauses as if they had taken it over. */
+export function pausedFor(id: string, stop: SignInStop): void {
+  if (isPaused(id)) return;
+  const owner = driverOf(id);
+  if (!owner) return;
+  useAgentPause.setState(({ paused, asked }) => ({ paused: { ...paused, [id]: owner.conversationId }, asked: { ...asked, [id]: stop } }));
   tell(owner.conversationId, id, true);
 }
 
@@ -91,10 +101,11 @@ export function pageUsed(id: string): void {
 export function handBack(id: string): void {
   const conversationId = useAgentPause.getState().paused[id];
   if (conversationId === undefined) return;
-  useAgentPause.setState(({ paused, devtools }) => {
+  useAgentPause.setState(({ paused, devtools, asked }) => {
     const { [id]: _gone, ...rest } = paused;
     const { [id]: _open, ...shut } = devtools;
-    return { paused: rest, devtools: shut };
+    const { [id]: _stop, ...others } = asked;
+    return { paused: rest, devtools: shut, asked: others };
   });
   tell(conversationId, id, false);
 }

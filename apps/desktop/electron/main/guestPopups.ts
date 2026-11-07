@@ -6,6 +6,7 @@ import { BrowserWindow, screen, type HandlerDetails, type WebContents } from "el
 import { note } from "./events";
 import { installFailedLoad } from "./guestFailedLoad";
 import { installGuestLinks, takeOsLink } from "./guestLinks";
+import { watchPasskeyRefusals, watchSignIn } from "./browserSignIn";
 import { installGuestMenu } from "./guestMenu";
 import { unfocused } from "./identity";
 
@@ -35,6 +36,9 @@ export function installGuest(contents: WebContents): void {
   installGuestMenu(contents, openAsTab);
   installFailedLoad(contents);
   installGuestLinks(contents);
+  const tab = tabGuest.get(contents) ?? contents;
+  watchSignIn(contents, tab);
+  watchPasskeyRefusals(contents, tab);
   contents.setWindowOpenHandler((details) => {
     if (takeOsLink(contents, details.url)) return { action: "deny" };
     if (!keepsOpener(details) || !webOrBlank(details.url)) {
@@ -53,7 +57,7 @@ export function installGuest(contents: WebContents): void {
         backgroundColor: "#ffffff",
         fullscreenable: false,
         // The opener's session comes by itself, so the popup is signed in as its tab is.
-        webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: false, webviewTag: false, webSecurity: true, allowRunningInsecureContent: false },
+        webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: true, webviewTag: false, webSecurity: true, allowRunningInsecureContent: false },
       },
     };
   });

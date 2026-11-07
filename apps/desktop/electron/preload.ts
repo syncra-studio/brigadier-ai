@@ -15,6 +15,7 @@ if (process.isMainFrame) contextBridge.exposeInMainWorld("brigadierShell", {
   guestInfo: (id: number) => ipcRenderer.invoke("brigadier:guest-info", id),
   guestFavicon: (id: number, href: string) => ipcRenderer.invoke("brigadier:guest-favicon", id, href),
   onGuestPasskey: (listener: (details: unknown) => void) => ipcRenderer.on("brigadier:guest-passkey", (_event, details) => listener(details)),
+  onGuestSignIn: (listener: (details: unknown) => void) => ipcRenderer.on("brigadier:guest-sign-in", (_event, details) => listener(details)),
   onGuestPopup: (listener: (details: unknown) => void) => ipcRenderer.on("brigadier:guest-popup", (_event, details) => listener(details)),
   onGuestPermission: (listener: (details: unknown) => void) => ipcRenderer.on("brigadier:guest-permission", (_event, details) => listener(details)),
   onGuestEscape: (listener: (details: unknown) => void) => ipcRenderer.on("brigadier:guest-escape", (_event, details) => listener(details)),

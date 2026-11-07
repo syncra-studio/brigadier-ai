@@ -12,6 +12,7 @@ import { ZOOM_LEAST, ZOOM_MOST } from "@/app/conversation/browserKeys";
 import { type BrowserBounds, type BrowserEvent, type BrowserFound } from "@/ipc/generated";
 
 import { devToolsChanged, userUsed } from "@/state/agentPause";
+import { signInSeen, type SignInSeen } from "@/state/browserSignIn";
 
 import { dropOverlay, installAgentOverlays, placeOverlay } from "./agentOverlay";
 import { watchUserComposition } from "./agentFocusGuard";
@@ -28,6 +29,7 @@ declare global {
       guestInfo(id: number): Promise<{ id: number; pid: number; url: string } | null>;
       guestFavicon(id: number, href: string): Promise<string | null>;
       onGuestPasskey(listener: (details: { from: number }) => void): void;
+      onGuestSignIn(listener: (details: { from: number } & SignInSeen) => void): void;
       onGuestPopup(listener: (details: { from: number; url: string }) => void): void;
       onGuestPermission(listener: (details: { from: number; request: number; origin: string; camera: boolean; microphone: boolean }) => void): void;
       onGuestEscape(listener: (details: { from: number }) => void): void;
@@ -191,6 +193,11 @@ export function installTabLayer(): void {
   window.brigadierShell.onGuestPasskey(({ from }) => {
     for (const page of pages.values()) {
       if (page.ready && page.element.getWebContentsId() === from) page.emit({ type: "passkeyRefused" });
+    }
+  });
+  window.brigadierShell.onGuestSignIn(({ from, ...seen }) => {
+    for (const page of pages.values()) {
+      if (page.ready && page.element.getWebContentsId() === from) signInSeen(page.id, seen);
     }
   });
   window.brigadierShell.onGuestEscape(({ from }) => {
