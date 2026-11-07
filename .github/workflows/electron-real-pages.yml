@@ -36,7 +36,7 @@ jobs:
       matrix:
         include:
           - { name: macOS Apple silicon, os: macos-latest, arch: arm64 }
-          - { name: macOS Intel, os: macos-15-intel, arch: x64 }
+          - { name: macOS Intel, os: macos-15-intel, arch: x64, lto: "false", units: "16" }
           - { name: Windows, os: windows-latest, arch: x64, lto: "false", units: "16" }
           - { name: Linux, os: ubuntu-24.04, arch: x64, lto: "false", units: "16" }
     runs-on: ${{ matrix.os }}
@@ -45,7 +45,7 @@ jobs:
       run:
         shell: bash
     env:
-      # As nightly.yml's Windows and Linux builds; the Mac's keeps the shipped profile.
+      # As nightly.yml's Windows and Linux builds; Intel too, whose shipped profile outlasts the job's limit. Apple silicon keeps the shipped profile.
       CARGO_PROFILE_RELEASE_LTO: ${{ matrix.lto || 'thin' }}
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ matrix.units || '1' }}
     steps:
